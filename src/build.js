@@ -3,23 +3,135 @@
 // Construction : pose d'un plan de blocs + maison de base.
 // ============================================================
 const { Vec3, log, say, sleep, goTo, GoalNear, GoalXZ, equipName, findSolidNeighbor, pillarUp,
-  countItem, collectBlocks, mcData } = require('./utils')
+  countItem, collectBlocks, mcData, craftItem, craftAnyPlanks, smeltItem, getWaterBucket } = require('./utils')
 
-// Pose une liste de blocs (triés du bas vers le haut).
-async function placePlan (bot, positions, blockName) {
-  const sorted = [...positions].sort((a, b) =>
-    (a.y - b.y) || (a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position)))
+const ALL_PLANKS = ['oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
+  'dark_oak_planks', 'cherry_planks', 'mangrove_planks', 'pale_oak_planks']
+const ALL_LOGS = ALL_PLANKS.map((p) => p.replace('_planks', '_log'))
+
+// ---------- Générateurs de plans (fonctions pures, testables) ----------
+
+// Premier matériau de la liste présent en quantité suffisante dans l'inventaire
+function pickMaterial (inv, candidates, min = 16) {
+  for (const c of candidates) if ((inv[c] ?? 0) >= min) return c
+  return null
+}
+
+// Plan d'une maison size×size, hauteur `height` : murs (porte au sud, fenêtres
+// vitrées est/ouest), toit plat ou pyramide, et équipement intérieur utile
+// (coffre, table de craft, four, torches).
+function housePlan (anchor, { size = 5, height = 3, wallBlock = 'oak_planks', roofBlock = 'cobblestone', roof = 'pyramid', windows = true } = {}) {
+  const entries = []
+  const door = []
+  const mid = Math.floor(size / 2)
+  const winY = height >= 3 ? 1 : 0
+  for (let x = 0; x < size; x++) {
+    for (let z = 0; z < size; z++) {
+      const isWall = x === 0 || x === size - 1 || z === 0 || z === size - 1
+      if (!isWall) continue
+      for (let y = 0; y < height; y++) {
+        const p = anchor.offset(x, y, z)
+        if (z === size - 1 && x === mid && y < 2) { door.push(p); continue } // porte 1×2 au sud
+        if (windows && y === winY && (x === 0 || x === size - 1) && z % 2 === 1 && z > 0 && z < size - 1) {
+          entries.push({ pos: p, block: 'glass' })
+          continue
+        }
+        entries.push({ pos: p, block: wallBlock })
+      }
+    }
+  }
+  // toit (débord d'un bloc) : dalle plate ou pyramide
+  for (let x = -1; x <= size; x++) {
+    for (let z = -1; z <= size; z++) {
+      let h = 1
+      if (roof === 'pyramid') h = Math.max(1, Math.min(x + 1, size - x, z + 1, size - z))
+      entries.push({ pos: anchor.offset(x, height + h - 1, z), block: roofBlock })
+    }
+  }
+  // équipement intérieur (au niveau du sol)
+  entries.push({ pos: anchor.offset(1, 0, 1), block: 'chest' })
+  entries.push({ pos: anchor.offset(size - 2, 0, 1), block: 'crafting_table' })
+  entries.push({ pos: anchor.offset(1, 0, size - 2), block: 'furnace' })
+  for (const [tx, tz] of [[mid, 1], [1, mid], [size - 2, mid]]) {
+    entries.push({ pos: anchor.offset(tx, 0, tz), block: 'torch' })
+  }
+  return { entries, door }
+}
+
+// Plan d'une ferme w×d : croix centrale de fossés d'eau (irrigue 4 blocs autour),
+// reste en terre labourée, clôture autour, torches aux coins intérieurs.
+function farmLayout (anchor, { w = 9, d = 9 } = {}) {
+  const midX = Math.floor(w / 2); const midZ = Math.floor(d / 2)
+  const farmland = []; const water = []; const fence = []; const torches = []
+  for (let x = 0; x < w; x++) {
+    for (let z = 0; z < d; z++) {
+      const ground = new Vec3(anchor.x + x, anchor.y - 1, anchor.z + z)
+      if (x === midX || z === midZ) water.push(ground)
+      else farmland.push(ground)
+      if (x === 0 || x === w - 1 || z === 0 || z === d - 1) {
+        fence.push(new Vec3(anchor.x + x, anchor.y, anchor.z + z))
+      }
+    }
+  }
+  // une source d'eau tous les ~5 blocs le long de la croix suffit (l'eau s'étend à 4 blocs)
+  const waterSources = [
+    new Vec3(anchor.x + midX, anchor.y - 1, anchor.z + 2),
+    new Vec3(anchor.x + midX, anchor.y - 1, anchor.z + d - 3),
+    new Vec3(anchor.x + 2, anchor.y - 1, anchor.z + midZ),
+    new Vec3(anchor.x + w - 3, anchor.y - 1, anchor.z + midZ)
+  ]
+  for (const [cx, cz] of [[1, 1], [w - 2, 1], [1, d - 2], [w - 2, d - 2]]) {
+    torches.push(new Vec3(anchor.x + cx, anchor.y, anchor.z + cz))
+  }
+  return { farmland, water, waterSources, fence, torches }
+}
+
+// Plan d'une enceinte rectangulaire w×d, hauteur h, avec torches sur le dessus.
+function wallPlan (center, { w = 17, d = 17, h = 3, block = 'cobblestone', torchEvery = 4 } = {}) {
+  const entries = []
+  const torches = []
+  const x0 = center.x - Math.floor(w / 2); const z0 = center.z - Math.floor(d / 2)
+  for (let x = 0; x < w; x++) {
+    for (let z = 0; z < d; z++) {
+      if (x !== 0 && x !== w - 1 && z !== 0 && z !== d - 1) continue
+      for (let y = 0; y < h; y++) entries.push({ pos: new Vec3(x0 + x, center.y + y, z0 + z), block })
+      if ((x + z) % torchEvery === 0) torches.push(new Vec3(x0 + x, center.y + h, z0 + z))
+    }
+  }
+  return { entries, torches }
+}
+
+// Plan d'un pont droit devant le bot, le long de son yaw.
+function bridgePlan (from, yaw, length = 16, block = 'cobblestone') {
+  const entries = []
+  const dirX = -Math.sin(yaw); const dirZ = -Math.cos(yaw)
+  for (let i = 2; i < length; i++) {
+    entries.push({ pos: new Vec3(Math.round(from.x + dirX * i), from.y - 1, Math.round(from.z + dirZ * i)), block })
+  }
+  return entries
+}
+
+// ---------- Pose de plans ----------
+
+// Pose une liste d'entrées { pos, block } (ou de Vec3 + blockName unique).
+async function placePlan (bot, entries, blockName) {
+  const list = entries.map((e) => (e && e.pos) ? e : { pos: e, block: blockName })
+  const sorted = [...list].sort((a, b) =>
+    (a.pos.y - b.pos.y) || (a.pos.distanceTo(bot.entity.position) - b.pos.distanceTo(bot.entity.position)))
   let placed = 0
   let fails = 0
-  for (const p of sorted) {
-    if (fails > 15) break
+  const scaffold = countItem(bot, 'cobblestone') > 0 ? 'cobblestone' : 'dirt'
+  for (const entry of sorted) {
+    if (fails > 20) break
+    const p = entry.pos
+    const name = entry.block
     const current = bot.blockAt(p)
-    if (current && current.name === blockName) { placed++; continue }
+    if (current && current.name === name) { placed++; continue }
     if (current && current.boundingBox === 'solid' && current.name !== 'air') { fails++; continue }
-    // s'élever si la cible est trop haute (échafaudage en cobble)
+    // s'élever si la cible est trop haute (échafaudage)
     const dy = p.y - bot.entity.position.y
     if (dy > 3) {
-      try { await pillarUp(bot, p.y - 1, 'cobblestone') } catch (e) { fails++; continue }
+      try { await pillarUp(bot, p.y - 1, scaffold) } catch (e) { fails++; continue }
     }
     const ref = findSolidNeighbor(bot, p)
     if (!ref) { fails++; continue }
@@ -28,7 +140,7 @@ async function placePlan (bot, positions, blockName) {
       if (!ok) { fails++; continue }
     }
     try {
-      await equipName(bot, blockName, 'hand')
+      await equipName(bot, name, 'hand')
       const face = p.minus(ref.position)
       await bot.placeBlock(ref, face)
       placed++
@@ -70,61 +182,151 @@ async function findFlatSpot (bot, size = 6) {
   return new Vec3(x, y, z) // tant pis : on construit où on est
 }
 
-// Construit une petite maison 5×5 (murs en planches, toit en cobble).
-async function buildHouse (bot) {
-  say(bot, '🏠 Je construis la base')
-  const md = mcData(bot)
-  const size = 5
-  const h = 3
-  // matériaux : planches + cobble pour le toit
-  if (countItem(bot, 'oak_planks') < 40) {
-    const needLogs = Math.ceil((48 - countItem(bot, 'oak_planks')) / 4)
-    await collectBlocks(bot, ['oak_log', 'birch_log', 'spruce_log', 'acacia_log'], needLogs, { maxDistance: 160, maxMinutes: 6 })
-    const { craftAnyPlanks } = require('./utils')
-    await craftAnyPlanks(bot, 48)
+// ---------- Matériaux ----------
+
+function inventoryMap (bot) {
+  const inv = {}
+  for (const i of bot.inventory.items()) inv[i.name] = (inv[i.name] ?? 0) + i.count
+  return inv
+}
+
+// Récolte/crafte ce qu'il faut pour avoir `count` blocs de blockName
+async function ensureMaterial (bot, blockName, count) {
+  const missing = count - countItem(bot, blockName)
+  if (missing <= 0) return
+  if (blockName.endsWith('_planks')) {
+    await collectBlocks(bot, ALL_LOGS, Math.ceil(missing / 4) + 2, { maxDistance: 160, maxMinutes: 6 })
+    await craftAnyPlanks(bot, missing)
+  } else if (blockName === 'cobblestone' || blockName === 'stone') {
+    await collectBlocks(bot, ['stone'], missing + 4, { maxDistance: 96, maxMinutes: 8 })
+  } else if (blockName === 'dirt') {
+    await collectBlocks(bot, ['dirt'], missing + 4, { maxDistance: 64, maxMinutes: 4 })
+  } else if (blockName === 'glass') {
+    const sand = await collectBlocks(bot, ['sand'], missing + 2, { maxDistance: 96, maxMinutes: 4 })
+    if (sand > 0) { try { await smeltItem(bot, 'sand', 'glass', missing) } catch (e) { log(`verre : ${e.message}`) } }
+  } else if (blockName.endsWith('_fence')) {
+    const planks = blockName.replace('_fence', '_planks')
+    await ensureMaterial(bot, planks, Math.ceil(missing / 2) + 2)
+    try { await craftItem(bot, blockName, missing) } catch (e) { log(`clôture : ${e.message}`) }
   }
-  if (countItem(bot, 'cobblestone') < 56) {
-    await collectBlocks(bot, ['stone', 'cobblestone'], 56 - countItem(bot, 'cobblestone'), { maxDistance: 64, maxMinutes: 6 })
-  }
+}
+
+// ---------- Construction ----------
+
+// Construit une maison size×size : matériaux choisis selon l'inventaire,
+// toit plat ou pyramide, fenêtres, et équipement intérieur (coffre, table, four).
+async function buildHouse (bot, { size = 5, height = 3, roof = 'pyramid' } = {}) {
+  say(bot, `🏠 Je construis une maison ${size}×${size}`)
+  const inv = inventoryMap(bot)
+  const wallBlock = pickMaterial(inv, ALL_PLANKS, 20) ?? pickMaterial(inv, ['cobblestone', 'stone'], 20) ?? 'dirt'
+  const roofBlock = pickMaterial(inv, ['cobblestone', 'stone'], 30) ?? pickMaterial(inv, ALL_PLANKS, 30) ?? wallBlock
+  const wallCount = (4 * size - 4) * height
+  const roofCount = (size + 2) * (size + 2)
+  await ensureMaterial(bot, wallBlock, wallCount + 8)
+  await ensureMaterial(bot, roofBlock, roofCount + 8)
+  await ensureMaterial(bot, 'glass', 4) // fenêtres (best-effort)
+  await ensureMaterial(bot, 'chest', 1)
+  await ensureMaterial(bot, 'crafting_table', 1)
+  await ensureMaterial(bot, 'furnace', 1)
+  if (countItem(bot, 'torch') < 3) { try { await craftItem(bot, 'torch', 3) } catch {} }
 
   const anchor = await findFlatSpot(bot, size + 2)
-  const wallBlock = countItem(bot, 'oak_planks') >= 40 ? 'oak_planks' : 'cobblestone'
-
-  const plan = []
-  for (let x2 = 0; x2 < size; x2++) {
-    for (let z2 = 0; z2 < size; z2++) {
-      const isWall = (x2 === 0 || x2 === size - 1 || z2 === 0 || z2 === size - 1)
-      if (!isWall) continue
-      for (let y2 = 0; y2 < h; y2++) {
-        // porte (trou 1×2) au milieu du côté sud
-        if (z2 === size - 1 && x2 === Math.floor(size / 2) && y2 < 2) continue
-        plan.push(anchor.offset(x2, y2, z2))
-      }
-    }
-  }
-  // toit 7×7 (dépasse d'un bloc de chaque côté)
-  for (let x2 = -1; x2 <= size; x2++) {
-    for (let z2 = -1; z2 <= size; z2++) {
-      plan.push(anchor.offset(x2, h, z2))
-    }
-  }
-  await placePlan(bot, plan, wallBlock)
-  // toit en cobble par-dessus les planches
-  const roof = []
-  for (let x2 = -1; x2 <= size; x2++) {
-    for (let z2 = -1; z2 <= size; z2++) {
-      roof.push(anchor.offset(x2, h, z2))
-    }
-  }
-  await placePlan(bot, roof, 'cobblestone')
-  // torches à l'intérieur
-  try {
-    await goTo(bot, new GoalNear(anchor.x + 2, anchor.y, anchor.z + 2, 1), { timeout: 20000, retries: 0 })
-    const { placeBlockFromInventory } = require('./utils')
-    if (countItem(bot, 'torch') >= 1) await placeBlockFromInventory(bot, 'torch')
-  } catch (e) { log(`torche intérieure ratée : ${e.message}`) }
-  say(bot, `🏠 Base construite en (${anchor.x}, ${anchor.y}, ${anchor.z})`)
+  const plan = housePlan(anchor, { size, height, wallBlock, roofBlock, roof })
+  const placed = await placePlan(bot, plan.entries)
+  say(bot, `🏠 Maison construite en (${anchor.x}, ${anchor.y}, ${anchor.z}) — ${placed} blocs posés`)
   return anchor
+}
+
+// Ferme automatique w×d : fossés d'eau en croix, terre labourée, graines, clôture, torches.
+async function buildFarm (bot, { w = 9, d = 9 } = {}) {
+  say(bot, `🌾 Je construis une ferme ${w}×${d}`)
+  if (countItem(bot, 'water_bucket') === 0) await getWaterBucket(bot)
+  const hoe = countItem(bot, 'iron_ingot') >= 3 ? 'iron_hoe' : 'wooden_hoe'
+  await craftItem(bot, hoe, 1)
+  const anchor = await findFlatSpot(bot, Math.max(w, d) + 2)
+  const layout = farmLayout(anchor, { w, d })
+  // creuser les fossés d'eau
+  for (const p of layout.water) {
+    const b = bot.blockAt(p)
+    if (b && b.boundingBox !== 'empty' && b.name !== 'water') {
+      try { await bot.dig(b, true) } catch {}
+    }
+  }
+  // poser les sources d'eau au fond des fossés
+  for (const p of layout.waterSources) {
+    try {
+      await goTo(bot, new GoalNear(p.x, p.y + 1, p.z, 1), { timeout: 20000, retries: 0 })
+      await equipName(bot, 'water_bucket', 'hand')
+      await bot.lookAt(p.offset(0.5, -0.4, 0.5))
+      await bot.activateItem()
+      await sleep(400)
+    } catch (e) { log(`eau ratée en ${p} : ${e.message}`) }
+  }
+  // labourer la terre
+  for (const p of layout.farmland) {
+    const soil = bot.blockAt(p)
+    if (!soil || soil.name === 'farmland') continue
+    try {
+      await goTo(bot, new GoalNear(p.x, p.y + 1, p.z, 1), { timeout: 15000, retries: 0 })
+      await equipName(bot, hoe, 'hand')
+      await bot.activateBlock(soil)
+      await sleep(200)
+    } catch (e) {}
+  }
+  // planter les graines si on en a
+  const seed = bot.inventory.items().find((i) => i.name === 'wheat_seeds')
+  if (seed) {
+    for (const p of layout.farmland) {
+      const soil = bot.blockAt(p)
+      if (!soil || soil.name !== 'farmland') continue
+      try {
+        await goTo(bot, new GoalNear(p.x, p.y + 1, p.z, 1), { timeout: 15000, retries: 0 })
+        await bot.equip(seed, 'hand')
+        await bot.activateBlock(soil)
+        await sleep(150)
+      } catch (e) {}
+    }
+  }
+  // clôture + torches (best-effort)
+  const inv = inventoryMap(bot)
+  const fenceBlock = pickMaterial(inv, ALL_PLANKS.map((p) => p.replace('_planks', '_fence')), 20)
+  if (fenceBlock) {
+    await ensureMaterial(bot, fenceBlock, layout.fence.length)
+    await placePlan(bot, layout.fence.map((pos) => ({ pos, block: fenceBlock })))
+  }
+  if (countItem(bot, 'torch') < 4) { try { await craftItem(bot, 'torch', 4) } catch {} }
+  await placePlan(bot, layout.torches.map((pos) => ({ pos, block: 'torch' })))
+  say(bot, `🌾 Ferme prête en (${anchor.x}, ${anchor.y}, ${anchor.z})`)
+  return anchor
+}
+
+// Enceinte de protection w×d autour d'un centre (base par défaut), avec torches dessus.
+async function buildWall (bot, { center, w = 17, d = 17, h = 3 } = {}) {
+  say(bot, `🧱 Je construis une enceinte ${w}×${d}`)
+  const c = center ?? bot.entity.position.floored()
+  const inv = inventoryMap(bot)
+  const block = pickMaterial(inv, ['cobblestone', 'stone', ...ALL_PLANKS, 'dirt'], 40) ?? 'cobblestone'
+  const count = (2 * w + 2 * d - 4) * h
+  await ensureMaterial(bot, block, count + 10)
+  if (countItem(bot, 'torch') < 8) { try { await craftItem(bot, 'torch', 8) } catch {} }
+  const plan = wallPlan(new Vec3(Math.round(c.x), Math.round(c.y), Math.round(c.z)), { w, d, h, block })
+  const placed = await placePlan(bot, plan.entries)
+  await placePlan(bot, plan.torches.map((pos) => ({ pos, block: 'torch' })))
+  say(bot, `🧱 Enceinte construite (${placed} blocs) autour de (${c.x}, ${c.z})`)
+  return plan
+}
+
+// Pont droit de `length` blocs devant le bot (dans la direction où il regarde).
+async function buildBridge (bot, length = 16) {
+  say(bot, `🌉 Je construis un pont de ${length} blocs`)
+  const from = bot.entity.position.floored()
+  const inv = inventoryMap(bot)
+  const block = pickMaterial(inv, ['cobblestone', 'stone', ...ALL_PLANKS], 8) ?? 'dirt'
+  await ensureMaterial(bot, block, length + 4)
+  const entries = bridgePlan(from, bot.entity.yaw, length, block)
+  const placed = await placePlan(bot, entries)
+  say(bot, `🌉 Pont posé (${placed}/${entries.length} blocs)`)
+  return placed
 }
 
 // Cadre de portail du Nether (14 obsidienne), puis allumage.
@@ -161,4 +363,8 @@ async function buildNetherPortal (bot) {
   return portalBlock.position
 }
 
-module.exports = { placePlan, findFlatSpot, buildHouse, buildNetherPortal }
+module.exports = {
+  placePlan, findFlatSpot,
+  pickMaterial, housePlan, farmLayout, wallPlan, bridgePlan,
+  buildHouse, buildFarm, buildWall, buildBridge, buildNetherPortal
+}

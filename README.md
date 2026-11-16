@@ -43,7 +43,10 @@ Le bot gère tout le reste : file d'attente Aternos, serveur qui dort, reconnexi
 |---|---|
 | `stop` / `pause` | met le bot en pause |
 | `reprendre` | relance la mission où elle s'était arrêtée |
-| `construire` | construit une maison à l'endroit actuel |
+| `construire [taille]` | construit une maison (3–11) ici : murs auto, fenêtres, toit, coffre + table de craft + four + torches à l'intérieur |
+| `ferme` | construit une ferme automatique irriguée (9×9) : fossés d'eau, terre labourée, graines, clôture, torches |
+| `mur` / `enceinte` | construit une enceinte avec torches autour de vous |
+| `pont` | construit un pont de 16 blocs dans la direction où le bot regarde |
 | `suivre` | le bot te suit |
 | `statut` | avancement de la mission |
 | `succès` | bilan complet des advancements (réussis / tentés / restants) |
@@ -62,7 +65,7 @@ Le bot répond aussi aux politesses en `/tell` (« salut », « merci », « gg 
 3. **Fer** — escalier sécurisé jusqu'à Y=16, minage en branche, fonte, **équipement complet en fer**, bouclier, briquet, 32 flèches
 4. **Diamants** — descente à Y=-58, minage en branche, armure + épée + pioche en diamant
 5. **Obsidienne** — verse de l'eau sur un lac de lave (méthode du seau)
-6. **Base** — remonte à la surface et **construit une maison 5×5** (murs planches, toit cobble, torches)
+6. **Base** — remonte à la surface et construit une **base complète** : maison 5×5 (fenêtres vitrées, toit pyramide, coffre + table de craft + four + torches à l'intérieur), **ferme 9×9 irriguée** et **enceinte 17×17 avec torches** (ferme/enceinte en best-effort : elles ne font pas échouer la phase)
 7. **Portail du Nether** — construit le cadre en obsidienne, l'allume, entre
 8. **Forteresse** — exploration du Nether jusqu'à trouver la forteresse
 9. **Blazes** — campe le spawner, tue les blazes, 12 bâtons

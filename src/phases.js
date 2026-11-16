@@ -11,7 +11,7 @@ const {
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian,
   digGravelForFlint, trackEyeOfEnder, findGroundBelow
 } = require('./utils')
-const { buildHouse, buildNetherPortal } = require('./build')
+const { buildHouse, buildNetherPortal, buildFarm, buildWall } = require('./build')
 
 const md = (bot) => mcData(bot)
 
@@ -129,11 +129,14 @@ async function phaseObsidian (bot, cfg, progress) {
 // ---------- Phase 6 : construction de la base ----------
 
 async function phaseBase (bot, cfg, progress) {
-  say(bot, '🏠 Phase 6 : construction de la base')
+  say(bot, '🏠 Phase 6 : construction de la base (maison + ferme + enceinte)')
   await ascendTo(bot, 68)
-  await buildHouse(bot)
-  // stocker quelques coordonnées utiles
-  progress.home = [bot.entity.position.x, bot.entity.position.y, bot.entity.position.z]
+  const home = await buildHouse(bot, { size: 5 })
+  // coordonnées utiles pour le watchdog (fuite vers la base)
+  progress.home = [Math.round(home.x), Math.round(home.y), Math.round(home.z)]
+  // best-effort : la ferme et l'enceinte ne doivent pas faire échouer la phase
+  try { await buildFarm(bot, { w: 9, d: 9 }) } catch (e) { log(`ferme non construite : ${e.message}`) }
+  try { await buildWall(bot, { center: home, w: 17, d: 17, h: 3 }) } catch (e) { log(`enceinte non construite : ${e.message}`) }
   await eatUntil(bot, 18)
 }
 

@@ -7,6 +7,7 @@ const { log, say, sleep, goTo, GoalFollow, randInt } = require('./utils')
 const { loadProgress, saveProgress } = require('./storage')
 const P = require('./phases')
 const P2 = require('./phases2')
+const build = require('./build')
 const advancements = require('./advancements')
 const learn = require('./learn')
 
@@ -211,9 +212,21 @@ async function handleCommand (bot, cfg, from, message) {
   } else if (/reprendre|resume|continue/.test(msg)) {
     resume(bot)
     if (!state.running) runMission(bot, cfg).catch((e) => log(e.stack))
-  } else if (/construire|build/.test(msg)) {
-    say(bot, '🏠 Je construis une maison ici')
-    try { await P.phaseBase(bot, cfg, loadProgress()) } catch (e) { say(bot, `échec construction : ${e.message}`) }
+  } else if (/construire|build|maison/.test(msg)) {
+    // "construire" ou "construire 7" : taille optionnelle (3 à 11)
+    const sizeMatch = msg.match(/(\d{1,2})/)
+    const size = sizeMatch ? Math.min(11, Math.max(3, parseInt(sizeMatch[1], 10))) : 5
+    say(bot, `🏠 Je construis une maison ${size}×${size} ici`)
+    try { await build.buildHouse(bot, { size }) } catch (e) { say(bot, `échec construction : ${e.message}`) }
+  } else if (/ferme|farm/.test(msg)) {
+    say(bot, '🌾 Je construis une ferme automatique ici')
+    try { await build.buildFarm(bot) } catch (e) { say(bot, `échec ferme : ${e.message}`) }
+  } else if (/mur|enceinte|wall|cloture/.test(msg)) {
+    say(bot, '🧱 Je construis une enceinte de protection autour de nous')
+    try { await build.buildWall(bot) } catch (e) { say(bot, `échec enceinte : ${e.message}`) }
+  } else if (/pont|bridge/.test(msg)) {
+    say(bot, '🌉 Je construis un pont devant moi')
+    try { await build.buildBridge(bot, 16) } catch (e) { say(bot, `échec pont : ${e.message}`) }
   } else if (/suivre|follow/.test(msg)) {
     followUser(bot, from)
   } else if (/statut|status|progress/.test(msg)) {

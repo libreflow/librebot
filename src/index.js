@@ -24,6 +24,8 @@ if (!config.host || !config.username) {
   console.error('❌ config.json incomplet : "host" et "username" sont obligatoires (voir config.example.json).')
   process.exit(1)
 }
+// cibles de récolte par défaut si absentes de la config
+config.targets ??= { rawIron: 48, diamonds: 32, obsidian: 14, blazeRods: 12, enderPearls: 24, enderEyes: 24 }
 
 const { log, say, sleep, goTo, GoalXZ, Vec3, versionAtLeast } = require('./utils')
 const { runMission, handleCommand, handleDeath, loadProgress, saveProgress, state } = require('./mission')

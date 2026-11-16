@@ -3,7 +3,7 @@
 // Construction : pose d'un plan de blocs + maison de base.
 // ============================================================
 const { Vec3, log, say, sleep, goTo, GoalNear, GoalXZ, equipName, findSolidNeighbor, pillarUp,
-  countItem, collectBlocks, mcData, craftItem, craftAnyPlanks, smeltItem, getWaterBucket } = require('./utils')
+  countItem, collectBlocks, mcData, craftItem, craftAnyPlanks, smeltItem, getWaterBucket, refillBucket } = require('./utils')
 
 const ALL_PLANKS = ['oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
   'dark_oak_planks', 'cherry_planks', 'mangrove_planks', 'pale_oak_planks']
@@ -225,9 +225,10 @@ async function buildHouse (bot, { size = 5, height = 3, roof = 'pyramid' } = {})
   await ensureMaterial(bot, wallBlock, wallCount + 8)
   await ensureMaterial(bot, roofBlock, roofCount + 8)
   await ensureMaterial(bot, 'glass', 4) // fenêtres (best-effort)
-  await ensureMaterial(bot, 'chest', 1)
-  await ensureMaterial(bot, 'crafting_table', 1)
-  await ensureMaterial(bot, 'furnace', 1)
+  // équipement intérieur : best-effort (ne fait pas échouer la maison)
+  for (const util of ['chest', 'crafting_table', 'furnace']) {
+    try { await ensureMaterial(bot, util, 1) } catch (e) { log(`équipement ${util} ignoré : ${e.message}`) }
+  }
   if (countItem(bot, 'torch') < 3) { try { await craftItem(bot, 'torch', 3) } catch {} }
 
   const anchor = await findFlatSpot(bot, size + 2)
@@ -252,9 +253,12 @@ async function buildFarm (bot, { w = 9, d = 9 } = {}) {
       try { await bot.dig(b, true) } catch {}
     }
   }
-  // poser les sources d'eau au fond des fossés
+  // poser les sources d'eau au fond des fossés (un seau = une source : on le re-remplit entre chaque)
   for (const p of layout.waterSources) {
     try {
+      if (countItem(bot, 'water_bucket') === 0) {
+        try { await refillBucket(bot) } catch { await getWaterBucket(bot) }
+      }
       await goTo(bot, new GoalNear(p.x, p.y + 1, p.z, 1), { timeout: 20000, retries: 0 })
       await equipName(bot, 'water_bucket', 'hand')
       await bot.lookAt(p.offset(0.5, -0.4, 0.5))

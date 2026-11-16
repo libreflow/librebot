@@ -19,7 +19,9 @@ const { record, saveProgress } = require('./advancements')
 async function runTasks (bot, cfg, progress, label, tasks) {
   say(bot, `━━━ 🛠️ Atelier : ${label} ━━━`)
   for (const task of tasks) {
-    while (bot.health < 12) { await eatUntil(bot); await sleep(3000) }
+    // attendre de se soigner, mais borné : sans nourriture on ne bloque pas indéfiniment
+    let starving = 0
+    while (bot.health < 12 && starving++ < 10) { await eatUntil(bot); await sleep(3000) }
     try {
       log(`▶ tâche : ${task.name}`)
       const ok = await task.run(bot, cfg, progress)

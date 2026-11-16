@@ -8,8 +8,9 @@ const {
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, smeltItem, eatUntil,
   huntMob, equipBestSword, placeBlockFromInventory, findSolidNeighbor,
-  pillarUp, digStaircase, ascendTo, shootWithBow
+  pillarUp, digStaircase, ascendTo, shootWithBow, isNight
 } = require('./utils')
+const { saveProgress } = require('./storage')
 
 // ---------- Nourriture ciblée ----------
 
@@ -44,8 +45,6 @@ async function shearSheepForWool (bot, count = 3) {
   }
   return countItem(bot, 'white_wool') >= count
 }
-
-const isNight = (bot) => { const t = bot.time.timeOfDay; return t > 13000 && t < 23000 }
 
 async function sleepInBed (bot) {
   say(bot, '🛏️ Je me fabrique un lit et je dors')
@@ -257,7 +256,6 @@ async function buildIronGolem (bot) {
   // 3 blocs de fer (27 lingots) + citrouille sculptée
   if (countItem(bot, 'iron_ingot') < 27) {
     await digStaircase(bot, 16)
-    const md = require('minecraft-data')
     const { branchMine } = require('./utils')
     await branchMine(bot, { y: 16, need: () => countItem(bot, 'raw_iron') >= 30, ores: ['iron_ore', 'deepslate_iron_ore'], extraOres: [], maxMinutes: 20 })
     await smeltItem(bot, 'raw_iron', 'iron_ingot', 30)
@@ -268,7 +266,7 @@ async function buildIronGolem (bot) {
   let pumpkin = bot.findBlock({ matching: mcData(bot).blocksByName.pumpkin?.id, maxDistance: 96 })
   if (!pumpkin) { await explore(bot, 120); pumpkin = bot.findBlock({ matching: mcData(bot).blocksByName.pumpkin?.id, maxDistance: 96 }) }
   if (!pumpkin) throw new Error('pas de citrouille pour le golem')
-  const carved = await collectBlocks(bot, ['pumpkin'], 1, { maxDistance: 96, maxMinutes: 2 })
+  await collectBlocks(bot, ['pumpkin'], 1, { maxDistance: 96, maxMinutes: 2 })
   // sculpter la citrouille avec des cisailles
   const p = await placeBlockFromInventory(bot, 'pumpkin')
   await equipName(bot, 'shears', 'hand')
@@ -379,9 +377,12 @@ async function enchantAttempt (bot) {
   if (countItem(bot, 'obsidian') < 4) throw new Error('pas assez d\'obsidienne')
   await craftItem(bot, 'book', 1) // cuir de vache + 3 papiers
   await craftItem(bot, 'enchanting_table', 1)
-  const md = mcData(bot)
-  if (countItem(bot, 'lapis_lazuli') === 0) {
-    await craftItem(bot, 'lapis_lazuli', 4) // débloquer le lapis en écrasant le minerai
+  if (countItem(bot, 'lapis_lazuli') < 9) {
+    // le lapis ne se crafte pas : il faut miner le minerai
+    const { branchMine } = require('./utils')
+    await digStaircase(bot, 16)
+    await branchMine(bot, { y: 16, need: () => countItem(bot, 'lapis_lazuli') >= 9, ores: ['lapis_ore', 'deepslate_lapis_ore'], extraOres: [], maxMinutes: 10 })
+    await ascendTo(bot, 68)
   }
   const table = await placeBlockFromInventory(bot, 'enchanting_table')
   if (!table) return false
@@ -444,12 +445,6 @@ async function exploreNetherBiomes (bot, progress, maxMinutes = 25) {
     await sleep(2000)
   }
   return visited.length >= 5
-}
-
-async function saveProgress (progress) {
-  const fs = require('fs')
-  const path = require('path')
-  try { fs.writeFileSync(path.join(__dirname, '..', 'progress.json'), JSON.stringify(progress, null, 2)) } catch (e) {}
 }
 
 async function goldToPiglin (bot) {

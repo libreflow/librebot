@@ -9,7 +9,7 @@ const {
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem, eatUntil,
   huntMob, equipBestSword, shootWithBow, placeBlockFromInventory, findSolidNeighbor,
-  digStaircase, ascendTo, makeObsidian
+  digStaircase, ascendTo, makeObsidian, findGroundBelow
 } = require('./utils')
 const { buildHouse, buildNetherPortal, placePlan } = require('./build')
 const S = require('./skills')
@@ -112,7 +112,7 @@ function wAventureOverworld () {
         { name: 'semis de blé', adv: ['seedy'], run: async () => { const p = await S.farmWheat(bot); return p > 0 } },
         {
           name: 'pousser le blé + reproduction des vaches',
-          adv: ['parrots_bats'],
+          adv: ['two_by_two'],
           run: async () => {
             const grew = await S.growWithBonemeal(bot, 5)
             if (!grew) return false
@@ -158,7 +158,7 @@ function wAventureOverworld () {
             const blockName = countItem(bot, 'cobblestone') > 0 ? 'cobblestone' : 'dirt'
             if (countItem(bot, blockName) < 200) return false // il faut vraiment beaucoup de blocs
             await S.pillarUpSafe(bot, 300, blockName)
-            const ground = await findGroundBelow(bot)
+            const ground = findGroundBelow(bot, 400)
             bot.setControlState('forward', true)
             try { await bot.look(bot.entity.yaw, 1.4) } catch {}
             while (bot.entity.position.y - ground > 12) await sleep(40)
@@ -173,16 +173,6 @@ function wAventureOverworld () {
       await runTasks(bot, cfg, progress, 'Aventure Overworld', tasks)
     }
   }
-}
-
-// helpers locaux pour la chute
-async function findGroundBelow (bot) {
-  const feet = bot.entity.position.floored()
-  for (let dy = -1; dy > -400; dy--) {
-    const b = bot.blockAt(feet.offset(0, dy, 0))
-    if (b && b.boundingBox === 'solid') return feet.y + dy + 1
-  }
-  return 0
 }
 
 // ---------- Atelier 2 : Tour du Nether ----------

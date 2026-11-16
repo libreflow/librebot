@@ -9,11 +9,8 @@
 //   partial → tenté automatiquement, réussite non garantie (conditions rares / mécanique délicate)
 //   manual  → non automatisé : tips dans le README
 // ============================================================
-const fs = require('fs')
-const path = require('path')
 const { log, say } = require('./utils')
-
-const PROGRESS_PATH = path.join(__dirname, '..', 'progress.json')
+const { loadProgress, saveProgress } = require('./storage')
 
 // [clé, nom, onglet, statut]
 const CATALOG = [
@@ -156,13 +153,6 @@ const CATALOG = [
 const byKey = Object.fromEntries(CATALOG.map(([key, name, tab, status]) => [key, { key, name, tab, status }]))
 
 // ---------- Tracker ----------
-
-function loadProgress () {
-  try { return JSON.parse(fs.readFileSync(PROGRESS_PATH, 'utf8')) } catch { return {} }
-}
-function saveProgress (p) {
-  try { fs.writeFileSync(PROGRESS_PATH, JSON.stringify(p, null, 2)) } catch (e) { log(`sauvegarde impossible : ${e.message}`) }
-}
 
 // Enregistre une tentative de succès ('ok' = réussi, 'attempt' = tenté sans garantie)
 function record (bot, keys, result = 'ok') {

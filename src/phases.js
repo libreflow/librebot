@@ -9,7 +9,7 @@ const {
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
   eatUntil, huntMob, shootWithBow, placeBlockFromInventory,
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian,
-  digGravelForFlint, trackEyeOfEnder
+  digGravelForFlint, trackEyeOfEnder, findGroundBelow
 } = require('./utils')
 const { buildHouse, buildNetherPortal } = require('./build')
 
@@ -358,15 +358,6 @@ async function gotoEndIsland (bot) {
   say(bot, '🌉 Je rejoins l\'île principale…')
   await goTo(bot, new GoalXZ(0, 0), { timeout: 240000, retries: 2 })
   await sleep(1000)
-}
-
-async function findGroundBelow (bot) {
-  const feet = bot.entity.position.floored()
-  for (let dy = -1; dy > -150; dy--) {
-    const b = bot.blockAt(feet.offset(0, dy, 0))
-    if (b && b.boundingBox === 'solid') return feet.y + dy + 1
-  }
-  return 0
 }
 
 // Descendre d'une tour : petite chute, ou saut + seau d'eau (MLG) si haut.

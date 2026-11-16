@@ -17,6 +17,32 @@ const say = (bot, msg) => { log(msg); try { bot.chat(String(msg)) } catch {} }
 const rand = (a, b) => a + Math.random() * (b - a)
 const randInt = (a, b) => Math.floor(rand(a, b + 1))
 
+// compare des versions type "26.1" / "1.21.4" : versionAtLeast(v, '1.21.2')
+function versionAtLeast (v, ref) {
+  const parts = (s) => String(s || '').split('.').map(Number)
+  const a = parts(v); const b = parts(ref)
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0)
+  }
+  return true
+}
+
+// nuit Minecraft : timeOfDay entre 13000 et 23000
+const isNight = (bot) => {
+  const t = bot.time?.timeOfDay ?? 0
+  return t >= 13000 && t <= 23000
+}
+
+// Y du premier bloc solide sous la position du bot (0 si rien trouvé)
+function findGroundBelow (bot, maxDepth = 200) {
+  const feet = bot.entity.position.floored()
+  for (let dy = -1; dy > -maxDepth; dy--) {
+    const b = bot.blockAt(feet.offset(0, dy, 0))
+    if (b && b.boundingBox === 'solid') return feet.y + dy + 1
+  }
+  return 0
+}
+
 function withTimeout (promise, ms) {
   return Promise.race([
     promise,
@@ -239,7 +265,7 @@ async function craftItem (bot, name, count) {
     await smeltItem(bot, 'raw_iron', 'iron_ingot', count)
     return
   }
-  const NOT_CRAFTABLE = ['diamond', 'raw_iron', 'coal', 'charcoal', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather', 'arrow_punch_does_not_exist']
+  const NOT_CRAFTABLE = ['diamond', 'raw_iron', 'coal', 'charcoal', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather']
   if (NOT_CRAFTABLE.includes(name)) throw new Error(`${name} ne se craft pas : phase récolte nécessaire`)
 
   const table = await ensureCraftingTable(bot)
@@ -300,13 +326,14 @@ async function smeltItem (bot, rawName, outName, count) {
     const raw = bot.inventory.items().find((i) => i.name === rawName)
     if (!raw) break
     const fuel = bot.inventory.items().find((i) =>
-      ['coal', 'charcoal', 'oak_planks', 'spruce_planks', 'birch_planks', 'oak_log', 'stick'].includes(i.name))
+      i.name === 'coal' || i.name === 'charcoal' || i.name === 'coal_block' || i.name === 'stick' ||
+      i.name.endsWith('_planks') || i.name.endsWith('_log'))
     if (!fuel) { log('plus de combustible'); break }
     const furnace = await bot.openFurnace(furnaceBlock)
     try {
       const batch = Math.min(raw.count, count - countItem(bot, outName))
       await furnace.putInput(raw.type, null, batch)
-      const perFuel = (fuel.name === 'coal' || fuel.name === 'charcoal') ? 8 : 2
+      const perFuel = (fuel.name === 'coal' || fuel.name === 'charcoal') ? 8 : fuel.name === 'coal_block' ? 80 : fuel.name === 'stick' ? 1 : 2
       await furnace.putFuel(fuel.type, null, Math.min(fuel.count, Math.max(1, Math.ceil(batch / perFuel))))
       for (let t = 0; t < 360; t++) { // attendre la cuisson (max 3 min par lot)
         await sleep(500)
@@ -679,6 +706,7 @@ async function trackEyeOfEnder (bot, maxMs = 15000) {
 
 module.exports = {
   Vec3, log, sleep, say, rand, randInt, withTimeout, mcData, countItem, equipName,
+  versionAtLeast, isNight, findGroundBelow,
   setMovements, goTo, GoalNear, GoalXZ, GoalY, GoalBlock, GoalFollow, explore, enterDimension,
   collectBlocks, collectNearbyItems,
   ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem,

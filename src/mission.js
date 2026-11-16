@@ -3,15 +3,12 @@
 // Orchestrateur : séquence de phases, progression persistante,
 // gestion des morts, commandes chat.
 // ============================================================
-const fs = require('fs')
-const path = require('path')
-const { log, say, sleep, goTo, GoalFollow } = require('./utils')
+const { log, say, sleep, goTo, GoalFollow, randInt } = require('./utils')
+const { loadProgress, saveProgress } = require('./storage')
 const P = require('./phases')
 const P2 = require('./phases2')
 const advancements = require('./advancements')
 const learn = require('./learn')
-
-const PROGRESS_PATH = path.join(__dirname, '..', 'progress.json')
 
 const PHASES = [
   { key: 'bois', label: 'Bois & outils', run: P.phaseWood },
@@ -36,19 +33,21 @@ const PHASES = [
   P2.wDiet()
 ]
 
-// ---------- Progression persistante ----------
+// ---------- État global ----------
 
-function loadProgress () {
-  try { return JSON.parse(fs.readFileSync(PROGRESS_PATH, 'utf8')) } catch { return {} }
-}
-
-function saveProgress (p) {
-  try { fs.writeFileSync(PROGRESS_PATH, JSON.stringify(p, null, 2)) } catch (e) { log(`sauvegarde impossible : ${e.message}`) }
+const state = {
+  paused: false,
+  running: false,
+  abort: false,       // true si une mort interrompt la mission en cours
+  followTimer: null,
+  bot: null
 }
 
 // À la mort, l'inventaire est perdu : on repart des phases de base,
 // mais on garde les coordonnées découvertes (forteresse, stronghold…).
 // On mémorise aussi le lieu de la mort pour s'en éloigner au respawn.
+// La mission en cours est interrompue proprement (state.abort) pour ne
+// pas écraser la progression remise à zéro.
 function handleDeath (bot) {
   const p = loadProgress()
   p.done = []
@@ -59,16 +58,11 @@ function handleDeath (bot) {
   saveProgress(p)
   const cause = learn.detectDeathCause(bot)
   learn.recordDeath(cause, bot)
+  state.abort = true
+  try { bot.pathfinder.stop() } catch {}
+  try { bot.pvp.stop() } catch {}
+  try { bot.clearControlStates?.() } catch {}
   log(`☠️ Mort détectée (cause apprise : ${cause}) : progression remise à zéro (coordonnées conservées)`)
-}
-
-// ---------- État global ----------
-
-const state = {
-  paused: false,
-  running: false,
-  followTimer: null,
-  bot: null
 }
 
 function stopAll (bot) {
@@ -110,6 +104,7 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
   if (state.running) { say(bot, '⏳ La mission tourne déjà'); return }
   state.running = true
   state.paused = false
+  state.abort = false
   try {
     const progress = fromStart ? { done: [] } : loadProgress()
     progress.done ??= []
@@ -118,8 +113,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         log(`⏭️ Phase déjà faite : ${ph.label}`)
         continue
       }
-      // attendre si en pause
-      while (state.paused || bot._fleeing) await sleep(2000)
+      // attendre si en pause (ou interrompre si le bot est mort)
+      while ((state.paused || bot._fleeing) && !state.abort) await sleep(2000)
+      if (state.abort) throw Object.assign(new Error('mission interrompue par une mort'), { aborted: true })
       say(bot, `━━━ ▶ Phase ${ph.label} ━━━`)
       let ok = false
       // stratégie apprise : une phase qui échoue souvent recevra plus de tentatives
@@ -127,7 +123,8 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
       const reliability = learn.phaseReliability(ph.key)
       if (reliability !== null && reliability < 0.5) log(`📉 Phase ${ph.label} peu fiable (${Math.round(reliability * 100)}%) — j'insiste (${strat.attempts} essais)`)
       for (let attempt = 1; attempt <= strat.attempts && !ok; attempt++) {
-        while (state.paused || bot._fleeing) await sleep(2000)
+        while ((state.paused || bot._fleeing) && !state.abort) await sleep(2000)
+        if (state.abort) throw Object.assign(new Error('mission interrompue par une mort'), { aborted: true })
         const t0 = Date.now()
         try {
           await ph.run(bot, cfg, progress)
@@ -156,19 +153,56 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
     say(bot, '🏆 MISSION ACCOMPLIE : le dragon est mort et les ateliers de succès sont passés !')
     say(bot, '📊 Dis-moi "succès" pour le bilan complet des advancements.')
   } catch (err) {
-    log(`erreur mission : ${err.stack}`)
-    say(bot, `💥 Erreur inattendue : ${err.message}`)
+    if (err.aborted) {
+      log('☠️ Mission interrompue par une mort — elle repartira automatiquement (progression remise à zéro)')
+    } else {
+      log(`erreur mission : ${err.stack}`)
+      say(bot, `💥 Erreur inattendue : ${err.message}`)
+    }
   } finally {
     state.running = false
+    if (state.abort) {
+      // la mort a eu lieu pendant la mission : au prochain lancement on
+      // repart de zéro (handleDeath a remis progress.done à [])
+      state.abort = false
+      if (cfg.autoMission) {
+        setTimeout(() => {
+          if (!state.running) runMission(bot, cfg).catch((e) => log(`mission error : ${e.stack}`))
+        }, 3000)
+      }
+    }
   }
 }
 
 // ---------- Commandes chat ----------
 
+// Petites réponses "pote" aux politesses en /tell (anti-spam : 60 s par joueur)
+const POLITENESS = [
+  { re: /merci|thanks|\bthx\b/, replies: ['de rien ! 😄', 'avec plaisir ! 🙌', 'pas de souci {user} !'] },
+  { re: /\b(salut|bonjour|coucou|hello|hey|yo)\b/, replies: ['salut {user} ! 👋', 'coucou {user} ! 😄', 'hey {user} !'] },
+  { re: /\b(gg|bien jou[ée]|bravo)\b/, replies: ['merci {user} ! 💪', 'gg à toi aussi ! 🎉'] },
+  { re: /comment (vas|va)\b|\b(ça|ca) va\b/, replies: ["ça va super, merci ! 😊 et toi {user} ?", 'tranquille {user}, et toi ? 🙂'] }
+]
+const politenessCooldown = new Map()
+
+function handlePoliteness (bot, from, msg) {
+  for (const p of POLITENESS) {
+    if (!p.re.test(msg)) continue
+    const last = politenessCooldown.get(from) ?? 0
+    if (Date.now() - last < 60000) return true
+    politenessCooldown.set(from, Date.now())
+    say(bot, p.replies[randInt(0, p.replies.length - 1)].replaceAll('{user}', from))
+    return true
+  }
+  return false
+}
+
 async function handleCommand (bot, cfg, from, message) {
   const msg = message.trim().toLowerCase()
   if (!msg) return
   log(`💬 ${from}: ${message}`)
+
+  if (handlePoliteness(bot, from, msg)) return
 
   if (/(stop|pause|arrête|arrete)/.test(msg)) {
     stopAll(bot)

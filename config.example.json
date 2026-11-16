@@ -5,6 +5,7 @@
   "auth": "offline",
   "version": null,
   "viewer": true,
+  "viewerPort": 3000,
   "autoMission": true,
   "targets": {
     "rawIron": 48,

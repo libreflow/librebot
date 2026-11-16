@@ -5,27 +5,24 @@
 // seuils de fuite, ses cibles de récolte et ses stratégies de
 // phase en fonction de son expérience passée.
 // ============================================================
-const fs = require('fs')
-const path = require('path')
-
-const LEARN_PATH = path.join(__dirname, '..', 'learning.json')
+const storage = require('./storage')
+const { HOSTILES } = require('./consts')
 
 function load () {
-  try { return JSON.parse(fs.readFileSync(LEARN_PATH, 'utf8')) } catch { /* premier run */ }
-  return {
+  return storage.loadJson('learning.json', {
     version: 1,
     phases: {},        // key -> { ok, fail, totalMs, lastError, lastMs }
     deaths: [],        // { cause, x, y, z, health, timeOfDay, when }
     flees: [],         // { survived, healthAtFlee, threat }
     discoveries: {},   // kind -> [{ x, y, z, when }] (forteresse, village, ruche…)
     skills: {}         // nom -> { tries, success, lastUsed } (tir à l'arc, minage…)
-  }
+  })
 }
 
 let data = load()
 
 function save () {
-  try { fs.writeFileSync(LEARN_PATH, JSON.stringify(data, null, 2)) } catch {}
+  storage.saveJson('learning.json', data)
 }
 
 // ---------- Phases ----------
@@ -81,7 +78,7 @@ function recordDeath (cause, bot) {
 function getFleeThreshold () {
   let threshold = 8
   for (const d of data.deaths.slice(-10)) {
-    if (d.cause !== 'combat' && d.cause !== 'mob') continue
+    if (!String(d.cause).startsWith('combat') && d.cause !== 'mob') continue
     if (d.health >= threshold) threshold = Math.min(14, d.health + 2)
   }
   return threshold
@@ -153,36 +150,35 @@ function skillLevel (name) {
 
 // Réduit les objectifs de récolte selon ce qu'on a déjà en inventaire,
 // pour ne pas farmer inutilement (ex: 32 diamants alors qu'on en a 20).
+// Les cibles de départ sont figées dans cfg.baseTargets : on recalcule
+// toujours depuis là, comme ça une mort (inventaire vide) remet les
+// objectifs à leur valeur complète au lieu de les laisser à zéro.
 function adjustTargets (cfg, bot) {
+  cfg.baseTargets ??= JSON.parse(JSON.stringify(cfg.targets ?? {}))
   const inv = {}
   for (const i of bot.inventory.items()) inv[i.name] = (inv[i.name] ?? 0) + i.count
   const map = {
     rawIron: 'raw_iron', diamonds: 'diamond', obsidian: 'obsidian',
     blazeRods: 'blaze_rod', enderPearls: 'ender_pearl', enderEyes: 'ender_eye'
   }
+  const targets = {}
   for (const [key, item] of Object.entries(map)) {
+    const want = cfg.baseTargets[key] ?? 0
     const have = inv[item] ?? 0
-    if (have >= cfg.targets[key]) cfg.targets[key] = 0
-    else cfg.targets[key] = Math.max(0, cfg.targets[key] - have)
+    targets[key] = Math.max(0, want - have)
   }
+  cfg.targets = targets
   return cfg.targets
 }
 
 // ---------- Détection de la cause de mort ----------
 
-const HOSTILE_NAMES = [
-  'zombie', 'skeleton', 'creeper', 'spider', 'enderman', 'witch', 'pillager',
-  'vindicator', 'evoker', 'ravager', 'hoglin', 'blaze', 'ghast', 'wither',
-  'phantom', 'drowned', 'husk', 'stray', 'zombie_villager', 'piglin',
-  'piglin_brute', 'zombified_piglin', 'magma_cube', 'slime', 'guardian', 'warden', 'breeze'
-]
-
 function detectDeathCause (bot) {
   if (!bot?.entity?.position) return 'inconnue'
   const pos = bot.entity.position.floored()
   // un hostile était juste à côté
-  for (const e of Object.values(bot.entities)) {
-    if (HOSTILE_NAMES.includes(e.name) && e.position?.distanceTo(pos) < 8) return 'combat:' + e.name
+  for (const e of Object.values(bot.entities ?? {})) {
+    if (HOSTILES.includes(e.name) && e.position?.distanceTo(pos) < 8) return 'combat:' + e.name
   }
   // lave / feu autour
   for (const [dx, dy, dz] of [[0, -1, 0], [0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {

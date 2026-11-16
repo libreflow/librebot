@@ -3,30 +3,39 @@
 // Point d'entrée : connexion (avec reconnexion automatique pour
 // Aternos), plugins, commandes chat, lancement de la mission.
 // ============================================================
+const fs = require('fs')
+const path = require('path')
 const mineflayer = require('mineflayer')
 const pathfinder = require('mineflayer-pathfinder')
 const collectBlock = require('mineflayer-collectblock')
 const pvp = require('mineflayer-pvp')
 const autoEat = require('mineflayer-auto-eat')
 const armorManager = require('mineflayer-armor-manager')
-const config = require('../config.json')
 
-const { log, say, sleep, goTo, GoalXZ, Vec3 } = require('./utils')
+const CONFIG_PATH = path.join(__dirname, '..', 'config.json')
+if (!fs.existsSync(CONFIG_PATH)) {
+  console.error('❌ config.json introuvable.')
+  console.error("   Copie l'exemple puis édite host/username :")
+  console.error('   cp config.example.json config.json')
+  process.exit(1)
+}
+const config = require(CONFIG_PATH)
+if (!config.host || !config.username) {
+  console.error('❌ config.json incomplet : "host" et "username" sont obligatoires (voir config.example.json).')
+  process.exit(1)
+}
+
+const { log, say, sleep, goTo, GoalXZ, Vec3, versionAtLeast } = require('./utils')
 const { runMission, handleCommand, handleDeath, loadProgress, saveProgress, state } = require('./mission')
 const { startSurvivalWatch } = require('./survie')
 const learn = require('./learn')
 
 let bot = null
+let reconnectDelay = 30000
 
-// compare des versions type "26.1" / "1.21.4" : versionAtLeast(v, '1.21.2')
-function versionAtLeast (v, ref) {
-  const parts = (s) => String(s || '').split('.').map(Number)
-  const a = parts(v); const b = parts(ref)
-  for (let i = 0; i < 3; i++) {
-    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0)
-  }
-  return true
-}
+// une promesse rejetée non attrapée ne doit jamais tuer le bot
+process.on('unhandledRejection', (err) => { log(`⚠️ promesse non gérée : ${err?.stack || err}`) })
+process.on('uncaughtException', (err) => { log(`⚠️ exception non gérée : ${err?.stack || err}`) })
 
 function createBot () {
   log(`🔌 Connexion à ${config.host}:${config.port} en tant que ${config.username}…`)
@@ -49,13 +58,18 @@ function createBot () {
       bot.autoEat.options = { priority: 'foodPoints', startAt: 16, banned: ['rotten_flesh'] }
     }
   } catch (e) { log(`auto-eat indisponible : ${e.message}`) }
-  try { bot.loadPlugin(require('mineflayer-hawk-eye')) } catch (e) { log('hawk-eye indisponible : tir à l\'arc en mode manuel') }
+  try {
+    const hawkEye = require('minecrafthawkeye')
+    bot.loadPlugin(hawkEye.default ?? hawkEye)
+    log('🏹 hawk-eye actif : tir à l\'arc précis')
+  } catch (e) { log('hawk-eye indisponible : tir à l\'arc en mode manuel') }
 
   // --- événements ---
 
   let protocolPatched = false
   bot.on('spawn', () => {
     log(`✅ Connecté ! (version serveur détectée : ${bot.version})`)
+    reconnectDelay = 30000 // connexion réussie : on remet le délai de reco à zéro
     if (!protocolPatched) {
       protocolPatched = true
       // Depuis 1.21.2, le serveur n'accepte qu'un paquet de position par tick et
@@ -94,18 +108,20 @@ function createBot () {
         log('⚠️ Version très récente : si des erreurs de protocole apparaissent,')
         log('   utilise `npm update` pour obtenir le dernier support mineflayer.')
       }
-      // viewer optionnel (POV navigateur sur http://localhost:3000)
+      // viewer optionnel (POV navigateur sur http://localhost:3000 par défaut)
       if (config.viewer) {
+        const viewerPort = config.viewerPort || 3000
         try {
           const mineflayerViewer = require('prismarine-viewer').mineflayer
-          mineflayerViewer(bot, { port: 3000, firstPerson: true })
-          log('👁️ POV disponible sur http://localhost:3000')
+          mineflayerViewer(bot, { port: viewerPort, firstPerson: true })
+          log(`👁️ POV disponible sur http://localhost:${viewerPort}`)
         } catch (e) { log(`viewer indisponible : ${e.message}`) }
       }
       // watchdog de survie (faim, armure, fuite, lave, noyade) — idempotent
       startSurvivalWatch(bot)
       // apprentissage : ajuste les cibles de récolte selon l'inventaire actuel
       learn.adjustTargets(config, bot)
+      say(bot, 'Salut ! Je suis connecté et prêt 🙌 Dis-moi "mission" ou "statut" en /tell !')
     }
     // après une mort, s'éloigner du lieu de la mort pour éviter de mourir en boucle au même endroit
     const progress = loadProgress()
@@ -169,8 +185,9 @@ function createBot () {
   })
 
   bot.on('end', () => {
-    log('🔌 Déconnecté. Nouvelle tentative dans 30 s…')
-    setTimeout(createBot, 30000)
+    log(`🔌 Déconnecté. Nouvelle tentative dans ${Math.round(reconnectDelay / 1000)} s…`)
+    setTimeout(createBot, reconnectDelay)
+    reconnectDelay = Math.min(reconnectDelay * 2, 120000) // backoff exponentiel, max 2 min
   })
 }
 

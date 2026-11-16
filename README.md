@@ -12,7 +12,7 @@ npm start
 
 ## 📋 Prérequis
 
-- **Node.js ≥ 18** (nodejs.org)
+- **Node.js ≥ 18** (nodejs.org) — Node ≥ 20 recommandé pour lancer les tests (`npm test`)
 - Un serveur **Minecraft Java 1.21.x à 26.1** — voir « Setup Aternos » et « Compatibilité versions » ci-dessous
 - Optionnel : une clé d'API… **non, justement, il n'y en a pas besoin.** 🎉
 
@@ -49,6 +49,9 @@ Le bot gère tout le reste : file d'attente Aternos, serveur qui dort, reconnexi
 | `succès` | bilan complet des advancements (réussis / tentés / restants) |
 | `reset` | remet la progression à zéro |
 | `mission` / `dragon` | lance la mission si pas déjà lancée |
+| `mémoire` | résumé de la mémoire apprise (morts, fuites, phases) |
+
+Le bot répond aussi aux politesses en `/tell` (« salut », « merci », « gg »…). 😄
 
 ## 🗺️ La mission (19 phases)
 
@@ -129,9 +132,9 @@ message explicite avec ces deux solutions au lieu d'un crash obscur.
 ## 🛡️ Robustesse
 
 - **Chaque phase est idempotente** : si tu relances, elle vérifie l'inventaire et ne refait que ce qui manque.
-- **À la mort**, l'inventaire est perdu : la mission repart à la phase 1 (rapide, tout se re-crafte) mais **conserve les coordonnées** découvertes (forteresse, stronghold…).
-- **3 essais par phase**, puis pause avec message — tu peux intervenir en jeu puis dire `reprendre`.
-- Reconnexion automatique (Aternos qui dort ou redémarre).
+- **À la mort**, l'inventaire est perdu : la mission s'interrompt proprement et **repart à la phase 1** (rapide, tout se re-crafte) en **conservant les coordonnées** découvertes (forteresse, stronghold…).
+- **5 à 8 essais par phase** (adaptatif : plus une phase échoue dans `learning.json`, plus le bot insiste), puis pause avec message — tu peux intervenir en jeu puis dire `reprendre`.
+- Reconnexion automatique avec backoff (30 s → 2 min max) : Aternos qui dort ou redémarre ne pose plus de souci.
 
 ## ⚠️ Ce qui peut demander des ajustements
 
@@ -160,10 +163,44 @@ et n'hésite pas à redire `reprendre`. Le fichier `progress.json` garde l'état
   "host": "ton-serveur.aternos.me",
   "username": "LibreBot",
   "viewer": true,
+  "viewerPort": 3000,
   "autoMission": true,
   "targets": { "rawIron": 48, "diamonds": 32, "obsidian": 14, "blazeRods": 12, "enderPearls": 24, "enderEyes": 24 }
 }
 ```
+
+Si `config.json` manque ou est incomplet, le bot affiche un message explicite au lieu de crasher.
+
+## ⚖️ Licence
+
+## 🛠️ Développement
+
+```
+npm install     # dépendances (prismarine-viewer est optionnel)
+npm start       # lance le bot
+npm test        # tests unitaires (node:test, zéro dépendance ajoutée)
+npm run check   # vérifie la syntaxe de tous les fichiers JS
+```
+
+Architecture (CommonJS, dans `src/`) :
+
+| Module | Rôle |
+|---|---|
+| `index.js` | point d'entrée : config, connexion + reconnexion, plugins, patch protocole 1.21.3+ |
+| `mission.js` | orchestrateur des 19 phases, commandes chat, gestion des morts |
+| `phases.js` / `phases2.js` | phases 1–13 (jusqu'au dragon) et ateliers de succès 14–19 |
+| `utils.js` | boîte à outils : déplacements, craft, fonte, minage, combat, construction |
+| `skills.js` | compétences des ateliers (pêche, ruche, village, Nether, End…) |
+| `build.js` | construction de la base et du portail du Nether |
+| `survie.js` | watchdog permanent : faim, armure, fuite, lave, noyade |
+| `learn.js` | mémoire persistante (`learning.json`) : morts, fuites, découvertes, stratégies de phase |
+| `advancements.js` | catalogue des succès + tracker |
+| `storage.js` | persistance JSON atomique (`progress.json`, `learning.json`) |
+| `consts.js` | constantes partagées (mobs hostiles, blocs dangereux) |
+
+Données persistées à la racine (gitignorées) : `progress.json`, `learning.json`.
+La variable d'environnement `LIBREBOT_DATA_DIR` permet de déplacer ce dossier
+(utilisée par les tests pour ne pas toucher aux vraies données).
 
 ## ⚖️ Licence
 

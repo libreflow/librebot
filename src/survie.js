@@ -6,9 +6,10 @@
 const {
   Vec3, log, say, sleep, goTo, GoalNear, GoalXZ,
   countItem, eatUntil, equipShield, equipBestSword, shootWithBow, withTimeout,
-  placeBlockFromInventory, mcData
+  placeBlockFromInventory, mcData, isNight
 } = require('./utils')
-const { loadProgress } = require('./mission')
+const { loadProgress } = require('./storage')
+const { HOSTILES, DANGER_BLOCKS } = require('./consts')
 const learn = require('./learn')
 
 // Mobs qu'il vaut mieux abattre à distance (jamais au corps à corps)
@@ -39,16 +40,6 @@ async function fightSmart (bot, hostile) {
   try { await withTimeout(bot.pvp.attack(hostile), 15000); learn.recordSkill('combat', true) } catch {}
 }
 
-const HOSTILES = [
-  'zombie', 'skeleton', 'creeper', 'spider', 'enderman', 'witch', 'pillager',
-  'vindicator', 'evoker', 'ravager', 'hoglin', 'blaze', 'ghast', 'wither',
-  'phantom', 'drowned', 'husk', 'stray', 'zombie_villager', 'piglin',
-  'piglin_brute', 'zombified_piglin', 'magma_cube', 'slime', 'guardian',
-  'elder_guardian', 'vex', 'warden', 'breeze'
-]
-
-const DANGER_BLOCKS = ['lava', 'magma_block', 'fire', 'campfire', 'soul_campfire', 'soul_fire']
-
 function nearestHostile (bot, maxDist) {
   let best = null
   let bestD = maxDist
@@ -75,11 +66,6 @@ function hasWeapon (bot) {
   return ['diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
     'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'mace', 'trident']
     .some((w) => countItem(bot, w) > 0)
-}
-
-function isNight (bot) {
-  const t = bot.time?.timeOfDay ?? 0
-  return t >= 13000 && t <= 23000
 }
 
 // Fuit vers la base si connue, sinon à l'opposé du danger

@@ -91,6 +91,17 @@ async function phaseStone (bot, cfg, progress) {
   } else {
     say(bot, '⚡ ' + haveStone + ' blocs de pierre déjà en stock — je passe le minage')
   }
+  // RÉSILIENCE reprise : la phase bois est souvent marquée « faite » (pioche en bois
+  // conservée) alors qu'il ne reste NI bûche NI planche en inventaire — les bâtons
+  // sont alors infabricables et toute la chaîne pierre échoue (« missing ingredient »).
+  const PLANK_NAMES = ['oak_planks', 'birch_planks', 'spruce_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks', 'pale_oak_planks']
+  const LOG_NAMES = PLANK_NAMES.map((p) => p.replace('_planks', '_log'))
+  const anyCount = (list) => list.reduce((a, n) => a + countItem(bot, n), 0)
+  if (countItem(bot, 'stick') < 2 && anyCount(PLANK_NAMES) === 0 && anyCount(LOG_NAMES) === 0) {
+    say(bot, '⚡ Ni bâtons ni bois en stock — je coupe une bûche express (reprise)')
+    await collectBlocks(bot, LOG_NAMES, 1, { maxDistance: 64, maxMinutes: 2 })
+  }
+  if (countItem(bot, 'stick') < 2) await craftItem(bot, 'stick', 2)
   await craftItem(bot, 'stone_pickaxe', 1)
   if (!rush) {
     await craftItem(bot, 'stone_axe', 1)

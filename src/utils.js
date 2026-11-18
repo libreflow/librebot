@@ -776,16 +776,20 @@ async function craftItem (bot, name, count) {
     await smeltItem(bot, smeltRaw, name, count)
     return
   }
-  const NOT_CRAFTABLE = new Set(['raw_iron', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather'])
+  const NOT_CRAFTABLE = new Set(['raw_iron', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather',
+    'oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log'])
   if (NOT_CRAFTABLE.has(name)) throw new Error(`${name} ne se craft pas : phase récolte nécessaire`)
 
   const table = await ensureCraftingTable(bot)
-  // cache des recettes par item id : recipesAll() recalcule toutes les variantes à chaque appel
-  const recipesKey = `${bot.version}:${item.id}:${!!table}`
+  // Cache des recettes STRUCTURELLES uniquement (celles de recipesAll ne dépendent
+  // PAS de l'inventaire). AVANT : le cache stockait le résultat de recipesFor(),
+  // qui est FILTRÉ par l'inventaire au moment de l'appel — une recette mémorisée
+  // alors qu'il manquait des ingrédients était ensuite rejouée telle quelle, et
+  // bot.craft() Throwait « missing ingredient ».
+  const recipesKey = `${bot.version}:${item.id}`
   let recipes = _recipesCache[recipesKey]
   if (!recipes) {
-    recipes = bot.recipesFor(item.id, null, 1, table) ?? []
-    if (!recipes.length) recipes = (bot.recipesAll(item.id, null, table) ?? []).filter((r) => (table || !r.requiresTable))
+    recipes = (bot.recipesAll(item.id, null, true) ?? []).filter((r) => !r.requiresTable || !!table)
     _recipesCache[recipesKey] = recipes
   }
   if (!recipes.length) throw new Error(`pas de recette pour ${name}`)
@@ -796,26 +800,51 @@ async function craftItem (bot, name, count) {
   // item par id : itemsById (clé id) prioritaire, fallback md.items[id] (objet keyed-by-id
   // sur les versions récentes ; array sur d'anciennes versions de minecraft-data)
   const itemById = (id) => md.itemsById?.[id] ?? (Array.isArray(md.items) ? md.items.find((i) => i.id === id) : md.items[id])
-  // préférer une recette craftable immédiatement (gère les variantes de planches)
-  const craftable = recipes.find((r) => (r.ingredients ?? []).every((ing) => {
+  // recette immédiatement craftable (gère les variantes : cobblestone vs blackstone,
+  // chaque type de planches…). Sinon on prend la première et on fabrique les manquants.
+  const isCraftableNow = (r) => (r.ingredients ?? []).every((ing) => {
     const it = itemById(ing.id)
     return it && countOf(it.name) >= (ing.count ?? 1)
-  }))
-  const recipe = craftable ?? recipes[0]
-  const resultCount = recipe.result?.count ?? 1
-  const crafts = Math.ceil(need / resultCount)
-
-  for (const ing of recipe.ingredients ?? []) {
-    const ingItem = itemById(ing.id)
-    if (!ingItem) continue
-    const ingNeed = (ing.count ?? 1) * crafts
-    if (countOf(ingItem.name) < ingNeed) await craftItem(bot, ingItem.name, ingNeed)
+  })
+  let recipe = recipes.find(isCraftableNow) ?? recipes[0]
+  // fabriquer (récursivement) les ingrédients manquants de la recette choisie
+  for (let pass = 0; pass < 3; pass++) {
+    let missing = false
+    const resultCount = recipe.result?.count ?? 1
+    const crafts = Math.ceil(need / resultCount)
+    for (const ing of recipe.ingredients ?? []) {
+      const ingItem = itemById(ing.id)
+      if (!ingItem) continue
+      const ingNeed = (ing.count ?? 1) * crafts
+      if (countOf(ingItem.name) < ingNeed) {
+        missing = true
+        await craftItem(bot, ingItem.name, ingNeed) // fabrique l'ingrédient (récursion)
+      }
+    }
+    if (missing) {
+      // l'inventaire a changé : RE-choisir une recette maintenant craftable
+      // (ex. la récursion a produit des planches de bouleau → prendre la variante bouleau)
+      recipe = recipes.find(isCraftableNow) ?? recipe
+      continue
+    }
+    const freshTable = await ensureCraftingTable(bot)
+    try {
+      await bot.craft(recipe, crafts, freshTable)
+      chat(bot, 'crafting', { count: crafts, item: name })
+      log('✓ crafté ' + crafts + '× ' + name)
+      return
+    } catch (e) {
+      // erreur mineflayer « missing ingredient » opaque → diagnostiquer précisément
+      const resultCount2 = recipe.result?.count ?? 1
+      const crafts2 = Math.ceil(need / resultCount2)
+      const lacks = (recipe.ingredients ?? [])
+        .map((ing) => ({ n: itemById(ing.id)?.name ?? ('id ' + ing.id), need: (ing.count ?? 1) * crafts2, have: countOf(itemById(ing.id)?.name ?? '') }))
+        .filter((i) => i.have < i.need)
+      if (lacks.length) throw new Error(`craft ${name} impossible : il manque ${lacks.map((l) => (l.need - l.have) + 'x ' + l.n).join(', ')}`)
+      throw e
+    }
   }
-
-  const freshTable = await ensureCraftingTable(bot)
-  await bot.craft(recipe, crafts, freshTable)
-  chat(bot, 'crafting', { count: crafts, item: name })
-  log('✓ crafté ' + crafts + '× ' + name)
+  throw new Error(`craft ${name} : ingrédients irrécupérables après 3 passes`)
 }
 
 // Fabrique des planches à partir de n'importe quels logs en inventaire

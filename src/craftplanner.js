@@ -38,7 +38,7 @@ function buildTree (bot, itemName, count = 1, depth = 0, seen = new Set()) {
     // Peut-être un item de table (table de craft requise)
     const tableRecipes = (bot.recipesAll(item.id, null, true) ?? []).filter(r => r.requiresTable)
     if (tableRecipes.length) {
-      const r = tableRecipes[0]
+      const r = bestVariant(bot, md, tableRecipes)
       return buildFromRecipe(bot, itemName, count, r, depth, seen, true)
     }
     // FONT/CUISINE : le four est une recette comme une autre (lingots, verre, nourriture cuite…)
@@ -56,7 +56,10 @@ function buildTree (bot, itemName, count = 1, depth = 0, seen = new Set()) {
     const it = md.itemsById?.[ing.id] ?? md.items?.[ing.id]
     return it && (invCount.get(it.name) ?? 0) >= (ing.count ?? 1)
   }))
-  const recipe = craftableNow ?? allRecipes[0]
+  // Variante intelligente : avant, recipes[0] = la PREMIÈRE variante des données
+  // (bâtons en planches de CERISIER, pioche en cobbled_deepslate...) alors que le
+  // bot a du chêne et du cobblestone → plan absurde (« à récolter : cherry_log »)
+  const recipe = craftableNow ?? bestVariant(bot, md, allRecipes)
   return buildFromRecipe(bot, itemName, count, recipe, depth, seen, false)
 }
 
@@ -76,6 +79,26 @@ function recipeIngredients (md, recipe) {
     }
   }
   return [...counts.entries()].map(([id, count]) => ({ id, count }))
+}
+
+// Choisit la meilleure VARIANTE d'une recette selon l'inventaire :
+// +2 par ingrédient déjà possédé, +3 si l'essence transformable est dispo
+// (planches de chêne alors qu'on a des bûches de chêne, cobblestone vs deepslate…)
+function bestVariant (bot, md, recipes) {
+  const invCount = new Map()
+  for (const i of bot.inventory.items()) invCount.set(i.name, (invCount.get(i.name) ?? 0) + i.count)
+  const score = (r) => {
+    let s = 0
+    for (const ing of recipeIngredients(md, r)) {
+      const it = md.itemsById?.[ing.id] ?? md.items?.[ing.id]
+      if (!it) continue
+      if ((invCount.get(it.name) ?? 0) > 0) s += 2
+      const src = it.name.replace('_planks', '_log')
+      if (src !== it.name && (invCount.get(src) ?? 0) > 0) s += 3
+    }
+    return s
+  }
+  return recipes.reduce((best, r) => (score(r) > score(best) ? r : best), recipes[0])
 }
 
 function buildFromRecipe (bot, itemName, count, recipe, depth, seen, needsTable) {

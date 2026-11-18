@@ -772,6 +772,8 @@ async function craftItem (bot, name, count) {
   const smeltRaw = bestSmeltRaw(bot, name)
   if (smeltRaw) {
     await smeltItem(bot, smeltRaw, name, count)
+    // smeltItem POST-VÉRIFIE désormais ; double contrôle de la production :
+    if (countItem(bot, name) < count) throw new Error(`fonte de ${name} incomplète (${countItem(bot, name)}/${count})`)
     return
   }
   const NOT_CRAFTABLE = new Set(['raw_iron', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather',
@@ -948,6 +950,13 @@ async function smeltItem (bot, rawName, outName, count) {
     await sleep(500)
   }
   if (countItem(bot, outName) < count) throw new Error(`fonte incomplète : ${outName} (${countItem(bot, outName)}/${count})`)
+
+  // POST-VÉRIFICATION (bug « missing ingredient » du 22:25) : avant, une fonte
+  // sans matière première (ou sans four) REVENAIT SANS RIEN PRODUIRE, et le craft
+  // appelant échouait plus loin avec l'opaque 'missing ingredient' de mineflayer.
+  if (countItem(bot, outName) < count) {
+    throw new Error(`fonte incomplète : ${outName} ${countItem(bot, outName)}/${count} — il manque ${(count - countItem(bot, outName))}x ${rawName} à cuire (four/combustible ?)`)
+  }
 }
 
 // ---------- Nourriture ----------

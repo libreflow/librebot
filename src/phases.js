@@ -120,7 +120,9 @@ async function phaseIron (bot, cfg, progress) {
   // adaptatif : le besoin compte AUSSI les lingots déjà fondus (butin de coffre,
   // reprise de run) — sinon on re-minait du fer alors qu'on en a déjà
   const ironTotal = () => countItem(bot, 'raw_iron') + countItem(bot, 'iron_ingot')
-  await getWaterBucket(bot) // seau d'eau gardé pour l'obsidienne
+  // ORDRE CORRIGÉ : le seau nécessite 3 lingots — le crafter AVANT le minage
+  // échouait (« missing ingredient » si 0 fer) et bloquait la phase instantanément.
+  // On mine/font d'abord, le seau est fabriqué/rempli avec les lingots produits.
   await digStaircase(bot, 16)
   if (ironTotal() >= cfg.targets.rawIron) {
     say(bot, '⚡ ' + ironTotal() + ' unités de fer en stock (mineraï + lingots) — je passe le minage')
@@ -151,6 +153,7 @@ async function phaseIron (bot, cfg, progress) {
   }
   // SPEEDRUN : 1 seul seau (on le reremplit à l'eau après l'obsidienne), flèches/torches réduites
   await craftItem(bot, 'bucket', rush ? 1 : 2)
+  await getWaterBucket(bot) // remplir d'eau (seau crafté ci-dessus avec le fer miné)
   const arrows = rush ? 8 : 32
   const arrowCrafts = Math.ceil(arrows / 4) // 1 flint + 1 plume + 1 bâton = 4 flèches
   // plumes : en rush la chasse aux poules de la phase 1 est sautée — sans ça,

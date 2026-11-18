@@ -435,6 +435,7 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         waited += 5000
       }
       state.currentPhase = ph.key
+      speedrun.setPhase(ph.key) // attribue les morts à la bonne phase dans la baseline
       chat(bot, 'phaseStart', { label: ph.label }, { force: true })
       say(bot, '━━━ ▶ Phase ' + ph.label + ' ━━━')
       let ok = false
@@ -590,6 +591,13 @@ async function handleCommand (bot, cfg, from, message) {
     say(bot, state.following ? `👣 Je suis ${state.following}.` : '👣 Je ne suis personne en ce moment.')
   } else if (/statut|status|progress/.test(msg)) {
     status(bot)
+  } else if (/baseline|goulot/.test(msg)) {
+    const b = speedrun.baseline()
+    say(bot, `📉 Baseline : ${b.runs} run(s), ${b.wins} victoire(s) — phases les plus lentes d'abord :`)
+    if (!b.phases.length) say(bot, '📉 Pas encore de données — lance la mission en mode rush !')
+    else for (const row of b.phases) {
+      say(bot, `📉 ${row.phase} : ${speedrun.fmt(row.avgDelta)} en moyenne (${speedrun.fmt(row.minDelta)}–${speedrun.fmt(row.maxDelta)}, n=${row.n}) — ${row.deaths} mort(s)`)
+    }
   } else if (/chrono|speedrun|split|\btemps\b/.test(msg)) {
     const desc = speedrun.describe()
     say(bot, '⏱️ ' + desc)

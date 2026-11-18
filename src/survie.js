@@ -121,8 +121,8 @@ function countHostiles (bot, maxDist) {
 }
 
 // un seul parcours d'inventaire (l'ancien faisait jusqu'à 11 countItem = 11 parcours)
-const MELEE_WEAPONS = new Set(['diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
-  'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'mace', 'trident'])
+const MELEE_WEAPONS = new Set(['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
+  'netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'mace', 'trident'])
 function hasWeapon (bot) {
   let bow = 0, arrow = 0
   for (const i of bot.inventory.items()) {
@@ -135,7 +135,7 @@ function hasWeapon (bot) {
 
 // Suffisamment équipé pour se battre au lieu de fuir :
 // bonne arme de mêlée + au moins 2 pièces d'armure + de quoi manger.
-const GOOD_WEAPONS = new Set(['diamond_sword', 'iron_sword', 'mace', 'diamond_axe', 'iron_axe', 'trident'])
+const GOOD_WEAPONS = new Set(['netherite_sword', 'diamond_sword', 'iron_sword', 'mace', 'netherite_axe', 'diamond_axe', 'iron_axe', 'trident'])
 function isWellEquipped (bot) {
   let weapon = false
   let armor = 0

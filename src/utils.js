@@ -978,7 +978,7 @@ async function eatUntil (bot, target = 18) {
 
 // ---------- Combat ----------
 
-const SWORD_PRIORITY = ['diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword']
+const SWORD_PRIORITY = ['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword', 'netherite_axe', 'diamond_axe', 'iron_axe']
 async function equipBestSword (bot) {
   // un seul items() puis find par priorité (évite 4× countItem = 4 parcours d'inventaire)
   const items = bot.inventory.items()

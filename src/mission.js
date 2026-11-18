@@ -353,11 +353,11 @@ function recoverPhasesFromInventory (bot, cfg, progress) {
     // bois : une pioche = l'atelier bois/outils a forcément tourné
     { key: 'bois', ok: pickAtLeast(['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) },
     // pierre : pioche pierre+ ET de quoi faire le fourneau (sinon le four manque plus tard)
-    { key: 'pierre', ok: pickAtLeast(['stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe']) && (n('furnace') > 0 || n('cobblestone') + n('stone') >= 8) },
+    { key: 'pierre', ok: pickAtLeast(['stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) && (n('furnace') > 0 || n('cobblestone') + n('stone') >= 8) },
     // fer : pioche fer+ ET de quoi faire briquet/seau (futurs prerequis du Nether)
-    { key: 'fer', ok: pickAtLeast(['iron_pickaxe', 'diamond_pickaxe']) && (has('flint_and_steel') || n('iron_ingot') >= 3 || has('bucket')) },
+    { key: 'fer', ok: pickAtLeast(['iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) && (has('flint_and_steel') || n('iron_ingot') >= 3 || has('bucket')) },
     // diamant : pioche diamant OU les diamants demandés déjà minés
-    { key: 'diamant', ok: has('diamond_pickaxe') || n('diamond') >= (t.diamonds ?? 3) },
+    { key: 'diamant', ok: has('diamond_pickaxe') || has('netherite_pickaxe') || n('diamond') >= (t.diamonds ?? 3) },
     { key: 'obsidienne', ok: n('obsidian') >= minObsidian },
     { key: 'base', ok: !!progress.home },
     // nether : déjà de l'autre côté, ou portail déjà monté

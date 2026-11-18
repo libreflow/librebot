@@ -8,10 +8,14 @@
 // vérifie quelles ressources manquent, et planifie l'ordre optimal
 // (miner d'abord, puis crafter dans le bon ordre).
 // ============================================================
-const { mcData, countItem, log } = require('./utils')
+const { mcData, countItem, log, SMELT_MAP, bestSmeltRaw } = require('./utils')
 
 // Items qui ne se craftent pas (à miner/récolter, pas à fabriquer)
-const NOT_CRAFTABLE = new Set(['diamond','raw_iron','raw_gold','raw_copper','coal','charcoal','flint','ender_pearl','blaze_rod','obsidian','feather','lapis_lazuli','redstone','glowstone_dust','quartz','ancient_debris','netherite_scrap','emerald','amethyst_shard','echo_shard','disc_fragment_5','goat_horn','sniffer_egg','golden_apple','enchanted_golden_apple','nether_star','dragon_egg','dragon_breath','elytra','totem_of_undying','heart_of_the_sea','nautilus_shell','phantom_membrane','shulker_shell','honeycomb','string','gunpowder','bone','slime_ball','spider_eye','rotten_flesh','blaze_powder','ghast_tear','magma_cream','prismarine_shard','prismarine_crystals','sand','gravel','clay_ball','ink_sac','honey_bottle','glass_bottle','leather','rabbit_hide','turtle_helmet','scute','armadillo_scute'])
+// Items réellement non-craftables (drops de mobs, minage, structures, boss).
+// AUDIT 26.1 : retirés car ils ONT une recette — golden_apple, leather, slime_ball, glass_bottle,
+// blaze_powder, magma_cream, honey_bottle, turtle_helmet, et les blocs->9 (diamond, coal, emerald,
+// redstone, lapis_lazuli, raw_*). Ils ne seront donc fabriqués QUE si besoin (à la demande).
+const NOT_CRAFTABLE = new Set(['flint','ender_pearl','blaze_rod','obsidian','feather','glowstone_dust','quartz','ancient_debris','emerald','amethyst_shard','echo_shard','disc_fragment_5','goat_horn','sniffer_egg','enchanted_golden_apple','nether_star','dragon_egg','dragon_breath','elytra','totem_of_undying','heart_of_the_sea','nautilus_shell','phantom_membrane','shulker_shell','honeycomb','string','gunpowder','bone','spider_eye','rotten_flesh','ghast_tear','prismarine_shard','prismarine_crystals','sand','gravel','clay_ball','ink_sac','rabbit_hide','scute','armadillo_scute'])
 
 // Build l'arbre de dépendances d'un item : { item, count, needs: [...], craftable: bool }
 function buildTree (bot, itemName, count = 1, depth = 0, seen = new Set()) {
@@ -36,6 +40,11 @@ function buildTree (bot, itemName, count = 1, depth = 0, seen = new Set()) {
     if (tableRecipes.length) {
       const r = tableRecipes[0]
       return buildFromRecipe(bot, itemName, count, r, depth, seen, true)
+    }
+    // FONT/CUISINE : le four est une recette comme une autre (lingots, verre, nourriture cuite…)
+    const raw = bestSmeltRaw(bot, itemName)
+    if (raw) {
+      return { item: itemName, count, smelt: true, raw, needs: [buildTree(bot, raw, count, depth + 1, new Set(seen))] }
     }
     return { item: itemName, count, have, needs: [], gather: true, missing: count - have }
   }
@@ -96,6 +105,7 @@ function flattenPlan (tree) {
     if (node.gather) { gather.push({ item: node.item, count: node.missing }); return }
     if (node.cycle || node.error) { gather.push({ item: node.item, count: node.count }); return }
     for (const n of node.needs ?? []) walk(n)
+    if (node.smelt) { crafts.push({ item: node.item, count: node.count, smelt: true, raw: node.raw }); return }
     if (node.recipe) crafts.push({ item: node.item, count: node.count, crafts: node.crafts })
   }
   walk(tree)
@@ -146,17 +156,18 @@ function craftableList (bot, limit = 60) {
 // Craft universel : construit le plan complet et exécute les crafts dans l'ordre.
 // Retourne true si l'item est possédé à la fin.
 async function craftAny (bot, itemName, count = 1) {
-  const { craftItem } = require('./utils')
+  const { craftItem, smeltItem } = require('./utils')
   const p = plan(bot, itemName, count)
   if (p.gather.length) {
     log('📋 ' + itemName + ' : ressources manquantes → ' + p.gather.map(g => g.count + 'x ' + g.item).join(', '))
-    return false
+    return 'ressources manquantes : ' + p.gather.map(g => g.count + 'x ' + g.item).join(', ')
   }
   log('📋 Plan pour ' + count + 'x ' + itemName + ' :\n' + p.summary)
   for (const c of p.crafts) {
-    try { await craftItem(bot, c.item, c.count) } catch (e) { log('craft ' + c.item + ' a échoué: ' + e.message); return false }
+    // étape de fonte/cuisine (four) ou craft d'établi
+    try { await (c.smelt ? smeltItem(bot, c.raw, c.item, c.count) : craftItem(bot, c.item, c.count)) } catch (e) { return e.message }
   }
-  return countItem(bot, itemName) >= count
+  return countItem(bot, itemName) >= count ? null : 'craft de ' + itemName + ' échoué'
 }
 
 module.exports = { plan, buildTree, flattenPlan, executePlan, craftableList, craftAny, NOT_CRAFTABLE }

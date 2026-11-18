@@ -759,12 +759,14 @@ async function craftItem (bot, name, count) {
   if (have >= count) return
   const need = count - have
 
-  // cas particuliers obtenus par d'autres moyens
-  if (name === 'iron_ingot') {
-    await smeltItem(bot, 'raw_iron', 'iron_ingot', count)
+  // cas particuliers obtenus par FONT/CUISINE (toutes les recettes du four vanilla) :
+  // utilisé uniquement quand le craft de cet item est réellement demandé
+  const smeltRaw = bestSmeltRaw(bot, name)
+  if (smeltRaw) {
+    await smeltItem(bot, smeltRaw, name, count)
     return
   }
-  const NOT_CRAFTABLE = new Set(['diamond', 'raw_iron', 'coal', 'charcoal', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather'])
+  const NOT_CRAFTABLE = new Set(['raw_iron', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather'])
   if (NOT_CRAFTABLE.has(name)) throw new Error(`${name} ne se craft pas : phase récolte nécessaire`)
 
   const table = await ensureCraftingTable(bot)
@@ -830,6 +832,49 @@ async function craftAnyPlanks (bot, count) {
 }
 
 // ---------- Fonte ----------
+
+// Recettes du FOUR (vanilla 26.1) : sortie -> matières premières possibles.
+// Absentes de minecraft-data : table maintenue ici. Plusieurs entrées possibles
+// (ex. verre = sable OU sable rouge) : celle la plus présente en inventaire est choisie.
+const SMELT_MAP = {
+  iron_ingot: ['raw_iron'],
+  gold_ingot: ['raw_gold'],
+  copper_ingot: ['raw_copper'],
+  netherite_scrap: ['ancient_debris'],
+  glass: ['sand', 'red_sand'],
+  charcoal: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log'],
+  stone: ['cobblestone'],
+  smooth_stone: ['stone'],
+  deepslate: ['cobbled_deepslate'],
+  terracotta: ['clay_ball'],
+  cooked_beef: ['beef'],
+  cooked_porkchop: ['porkchop'],
+  cooked_chicken: ['chicken'],
+  cooked_mutton: ['mutton'],
+  cooked_rabbit: ['rabbit'],
+  cooked_cod: ['raw_cod'],
+  cooked_salmon: ['raw_salmon'],
+  baked_potato: ['potato'],
+  dried_kelp: ['kelp'],
+  popped_chorus_fruit: ['chorus_fruit'],
+  cracked_stone_bricks: ['stone_bricks'],
+  cracked_nether_bricks: ['nether_bricks'],
+  cracked_deepslate_bricks: ['deepslate_bricks'],
+  cracked_deepslate_tiles: ['deepslate_tiles']
+}
+
+// Choisit la matière première de fonte la plus disponible (fallback : la première)
+function bestSmeltRaw (bot, name) {
+  const raws = SMELT_MAP[name]
+  if (!raws?.length) return null
+  let best = raws[0]
+  let bestCount = -1
+  for (const r of raws) {
+    const c = countItem(bot, r)
+    if (c > bestCount) { bestCount = c; best = r }
+  }
+  return best
+}
 
 async function smeltItem (bot, rawName, outName, count) {
   const md = mcData(bot)
@@ -1318,7 +1363,7 @@ module.exports = {
   Vec3, log, sleep, say, chat, proactive, announce, isItemDrop, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, watchBlockChanges, sortInventory, dropJunk, legit, rand, randInt, withTimeout, mcData, blockId, countItem, hasAnyItem, findEntities, equipName, digBlock,
   setMovements, goTo, walkDirect, GoalNear, GoalXZ, GoalY, GoalBlock, GoalFollow, explore, enterDimension,
   collectBlocks, collectNearbyItems, lootNearbyChests, lootSingleChest, isChestLooted,
-  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem,
+  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw,
   eatUntil, FOOD_NAMES,
   equipBestSword, equipShield, huntMob, shootWithBow,
   placeBlockFromInventory, findSolidNeighbor, pillarUp,

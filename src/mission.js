@@ -640,7 +640,7 @@ async function handleCommand (bot, cfg, from, message) {
   } else if (/^craft /.test(msg)) {
     const item = msg.replace(/^craft /, '').trim().replace(/ /g, '_')
     say(bot, '🔨 Je tente de crafter ' + item + '…')
-    require('./craftplanner').craftAny(bot, item, 1).then((ok) => say(bot, ok ? '✅ ' + item + ' crafté !' : '❌ ' + item + ' impossible (ressources manquantes)')).catch((e) => say(bot, 'échec: ' + e.message))
+    require('./craftplanner').craftAny(bot, item, 1).then((err) => say(bot, !err ? '✅ ' + item + ' crafté !' : '❌ ' + item + ' impossible : ' + err)).catch((e) => say(bot, 'échec: ' + e.message))
   } else if (/qui tu suis|following/.test(msg)) {
     say(bot, state.following ? `👣 Je suis ${state.following}.` : '👣 Je ne suis personne en ce moment.')
   } else if (/statut|status|progress/.test(msg)) {

@@ -168,6 +168,7 @@ function evaluate (bot, context = {}) {
     const armed = context.armed ?? false
     const hasBow = context.hasBow ?? false
     const health = bot.health ?? 20
+    const wellEquipped = context.wellEquipped ?? false
 
     if (health <= 6 && hostilesNear > 0) {
       candidates.push({ action: 'FUITE', reason: 'vie ' + Math.round(health) + ' vs ' + hostilesNear + ' hostile(s)' })
@@ -175,10 +176,12 @@ function evaluate (bot, context = {}) {
     if (!armed && hostilesNear > 0 && dist < 10) {
       candidates.push({ action: 'FUITE', reason: 'pas armé, ' + hostilesNear + ' hostile(s) à ' + Math.round(dist) })
     }
-    if (hostilesNear > 2) {
-      candidates.push({ action: 'FUITE', reason: hostilesNear + ' hostiles proches' })
+    // bien équipé + vie correcte : on se bat, même à 3-4 hostiles ;
+    // on ne fuit à l'outnumber que mal équipé, blessé, ou submergé
+    if (hostilesNear > 2 && (!wellEquipped || health < 10 || hostilesNear > 4)) {
+      candidates.push({ action: 'FUITE', reason: hostilesNear + ' hostiles proches' + (wellEquipped ? ' (+overwhelm)' : '') })
     }
-    if (armed && health > 8 && hostilesNear <= 2 && dist < 16) {
+    if (armed && health > 8 && (wellEquipped ? hostilesNear <= 4 : hostilesNear <= 2) && dist < 16) {
       if (dist <= 6 && hostilesNear === 1) {
         candidates.push({ action: 'MONSTRE_FAIBLE', reason: context.hostile.name + ' à ' + Math.round(dist) + ' blocs, vie ' + Math.round(health) })
       } else {

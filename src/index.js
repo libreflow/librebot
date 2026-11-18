@@ -65,6 +65,10 @@ const target = require('./target')
 const learn = require('./learn')
 
 let bot = null
+// dernier port LAN qui a MARCHÉ cette session + drapeau de refus (monde rouvert = nouveau port aléatoire)
+let _lanPortOk = null
+let _lanRefused = false
+let _curTgt = null
 
 // compare des versions type "26.1" / "1.21.4" : versionAtLeast(v, '1.21.2')
 function versionAtLeast (v, ref) {
@@ -80,14 +84,21 @@ function versionAtLeast (v, ref) {
 // on bascule sur l'autre (LAN <-> Aternos) au lieu de boucler sur rien.
 async function createBot () {
   let tgt = target.resolve(config)
-  if (!tgt && config.lan) {
-    // Aucun port dans les logs/client : on écoute les annonces Open-to-LAN
+  if (config.lan && _lanPortOk) {
+    // un port LAN a déjà marché cette session : on le réutilise (pas de re-découverte)
+    tgt = { host: config.lanHost || '127.0.0.1', port: _lanPortOk, lan: true }
+  }
+  if (config.lan && (!_lanPortOk || _lanRefused)) {
+    if (_lanRefused || !tgt) {
+    // refus de connexion sur le port connu (monde rouvert = nouveau port aléatoire)
+    // ou aucun port dans les logs : on écoute les annonces Open-to-LAN
     // (multicast 224.0.2.60:4445) — fonctionne avec n'importe quel port local
-    log('🔍 Pas de port LAN dans les logs — j\'écoute les annonces "Ouvrir au réseau local" (6 s)…')
+    log('🔍 ' + (_lanRefused ? 'Port LAN refusé (monde rouvert ?) — j\'écoute les annonces' : 'Pas de port LAN dans les logs — j\'écoute les annonces') + ' "Ouvrir au réseau local" (6 s)…')
     const port = await require('./lan').listenLanAnnounce(6000)
     if (port) {
       tgt = { host: config.lanHost || '127.0.0.1', port, lan: true }
       log('📡 Monde LAN découvert automatiquement : port ' + port)
+    }
     }
   }
   if (!tgt) {
@@ -97,6 +108,7 @@ async function createBot () {
     setTimeout(createBot, 15000)
     return
   }
+  _curTgt = tgt
   log('🔌 Connexion à ' + tgt.host + ':' + tgt.port + ' en tant que ' + config.username + '… (' + target.label(config, tgt) + ')')
   bot = mineflayer.createBot({
     host: tgt.host,
@@ -134,6 +146,9 @@ async function createBot () {
 
   let protocolPatched = false
   bot.on('spawn', () => {
+    // connexion LAN réussie : on mémorise le port qui marche (les prochaines
+    // reconnexions l'utilisent direct, sans re-découverte de 6 s)
+    if (_curTgt?.lan !== false) { _lanPortOk = _curTgt.port; _lanRefused = false }
     bot._spawnedOnce = true
     log(`✅ Connecté ! (version serveur détectée : ${bot.version})`)
     if (!protocolPatched) {
@@ -339,6 +354,9 @@ async function createBot () {
   })
 
   bot.on('error', (err) => {
+    // port LAN refusé : le monde a été rouvert avec un nouveau port aléatoire —
+    // on invalide pour que la prochaine tentative redécouvre par multicast
+    if (err.code === 'ECONNREFUSED' && _curTgt?.lan !== false) { _lanPortOk = null; _lanRefused = true }
     const msg = String(err.message || err)
     // Erreur réseau AVANT le premier spawn = serveur down : on bascule de cible
     if (!bot._spawnedOnce && config.fallback !== false && ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNRESET'].includes(err.code)) {

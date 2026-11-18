@@ -26,6 +26,12 @@ const main = async () => {
   const t2 = lan.resolveTarget({ lan: true }, dir)
   check(t2 && t2.port === 54321, 'repli lecture logs latest.log (« hosted on port »)')
 
+  // 5. comportement de récupération dans index.js : port refusé -> invalidation + redécouverte
+  const idx = require('fs').readFileSync('./src/index.js', 'utf8')
+  check(idx.includes("err.code === 'ECONNREFUSED' && _curTgt?.lan !== false") && idx.includes('_lanPortOk = null; _lanRefused = true'), 'ECONNREFUSED sur port LAN -> invalidation + redécouverte multicast à la prochaine tentative')
+  check(idx.includes('_lanPortOk = _curTgt.port; _lanRefused = false'), 'spawn réussi -> port LAN mémorisé (reconnexions instantanées)')
+  check(idx.includes('_lanRefused || !tgt') && idx.includes('listenLanAnnounce(6000)'), 'monde rouvert (nouveau port) : écoute multicast avant de retenter')
+
   console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
   process.exit(fails === 0 ? 0 : 1)
 }

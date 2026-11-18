@@ -224,6 +224,9 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
   let lastDig = 0
   let strafeUntil = 0
   let strafeDir = 1
+  let jumpsSinceMove = 0 // budget de sauts depuis le dernier mouvement réel
+  let lastJumpAt = 0 // impulsion : saut ON puis OFF, pas maintenu
+  let strafeCount = 0 // contournements tentés avant d'abandonner
   let lastDbg = 0
   let lastLook = 0 // lookAt throttle : 1 paquet réseau toutes les 300 ms, pas 10/s
   const clear = () => { for (const s of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) bot.setControlState(s, false) }
@@ -265,11 +268,24 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
         log(`🚶 pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) dist=${d2.toFixed(1)} yaw=${(bot.entity.yaw ?? 0).toFixed(2)} stuck=${Date.now() - lastMove}ms`)
       }
       // blocage = aucun mouvement HORIZONTAL (le saut vertical ne compte pas)
-      if (Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z) > 0.2) { lastPos = pos.clone(); lastMove = Date.now() }
+      if (Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z) > 0.2) {
+        lastPos = pos.clone()
+        lastMove = Date.now()
+        jumpsSinceMove = 0 // mouvement réel : on remet le budget de sauts à zéro
+        strafeCount = 0
+      }
       const stuckFor = Date.now() - lastMove
       if (inWater) bot.setControlState('jump', true) // nage : remonter à la surface pour respirer
       if (stuckFor > 1200 || holeAhead) {
-        bot.setControlState('jump', true) // sauter l'obstacle / le petit trou
+        // SAUT EN IMPULSIONS BORNÉES : avant, jump restait true tant qu'on était
+        // « bloqué » → si l'obstacle était infranchissable (toit, mur haut), le bot
+        // SAUTAIT SUR PLACE indéfiniment (aucun mouvement horizontal = jamais
+        // débloqué). Maintenant : max 3 impulsions de saut, sinon on passe au
+        // contournement puis on rend la main au pathfinder.
+        if (Date.now() - lastJumpAt > 650) {
+          if (jumpsSinceMove < 3 && !inWater) { jumpsSinceMove++; lastJumpAt = Date.now(); bot.setControlState('jump', true) }
+          else bot.setControlState('jump', false)
+        } else if (Date.now() - lastJumpAt > 260) bot.setControlState('jump', false)
         if (obstacle && stuckFor > 2500 && Date.now() - lastDig > 1500) {
           // re-vérifier que l'obstacle est toujours solide (sinon dig bloque = tape dans le vide)
           const freshObstacle = bot.blockAt(obstacle.position)
@@ -279,15 +295,21 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
             await digBlock(bot, freshObstacle, 3000).catch(() => {})
           }
         }
-        // très bloqué : contourner sur le côté comme un joueur
-        if (stuckFor > 3500 && Date.now() > strafeUntil) {
+        // CONTOURNEMENT BORNÉ : avant, l'alternance gauche/droite se répétait
+        // indéfiniment tant que le bot restait « bloqué » → le fameux MOONWALK.
+        // Maintenant : 2 tentatives de contournement, puis on rend la main au
+        // pathfinder (qui sait creuser/poser des blocs) au lieu de danser.
+        if (stuckFor > 3500 && Date.now() > strafeUntil && strafeCount < 2) {
           strafeDir = -strafeDir
-          strafeUntil = Date.now() + 900
+          strafeUntil = Date.now() + 800
+          strafeCount++
         }
-        // grand trou devant et toujours coincé longtemps : abandon (le pathfinder tranchera).
-        // Seuil relevé (depth 5, 10 s) : avant on abandonnait trop tôt et le pathfinder
-        // mettait 20 s à calculer → "délai dépassé" global.
-        if (depth >= 5 && stuckFor > 10000) return false
+        // abandon raisonné — le pathfinder bâtit/minera un vrai chemin :
+        // - trou profond : inutile de sauter dedans, il faut un pont (le pathfinder en pose)
+        // - bloqué malgré sauts + contournements + minage : this walkDirect n'aboutira pas
+        if (depth >= 3 && !holeAhead && stuckFor > 3000) return false
+        if (depth >= 5) return false // (les ponts sont son affaire, pas la notre)
+        if (stuckFor > 6000 && jumpsSinceMove >= 3 && strafeCount >= 2) return false
       } else {
         bot.setControlState('jump', false)
       }

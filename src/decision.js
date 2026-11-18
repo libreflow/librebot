@@ -243,10 +243,4 @@ function evaluate (bot, context = {}) {
 
 // Quand la mission et le watchdog veulent des choses différentes,
 // cette fonction décide qui a la priorité.
-function arbitrate (missionDecision, survivalDecision) {
-  if (survivalDecision.score >= 400) return 'survie'
-  if (survivalDecision.action === 'MOURIR' || survivalDecision.action === 'LAVE_FEU') return 'survie'
-  return 'mission'
-}
-
-module.exports = { evaluate, arbitrate, buildState, PRIORITY, scoreAction }
+module.exports = { evaluate, buildState, PRIORITY, scoreAction }

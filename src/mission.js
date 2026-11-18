@@ -7,7 +7,7 @@ const { log, say, chat, proactive, announce, sleep, goTo, GoalFollow, GoalNear, 
 
 // helpers locaux (évite un cycle d'import avec survie.js)
 const isNight = (bot) => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t <= 23000 }
-const MELEE_WEAPONS = ['wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword',
+const MELEE_WEAPONS = ['wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword',
   'wooden_axe', 'stone_axe', 'iron_axe', 'diamond_axe', 'mace', 'trident']
 // un seul parcours d'inventaire pour bow+arrow+toutes les armes de mêlée
 // (l'ancien hasWeapon faisait jusqu'à 11 countItem = 11 parcours complets)
@@ -80,6 +80,8 @@ function handleDeath (bot) {
   saveProgress(p)
   const cause = cause0
   learn.recordDeath(cause, bot)
+  // mémoire spatiale : le lieu de la mort devient une zone DANGER connue du cerveau
+  if (bot?.entity?.position) learn.recordSpatial('danger:death', bot.entity.position.floored(), 10)
   speedrun.noteDeath(log) // le chrono speedrun continue malgré la mort
   chat(bot, 'death', { cause }, { force: true })
   log('☠️ Mort détectée (cause apprise : ' + cause + ') : progression remise à zéro (coordonnées conservées)' + (state.deathStreak >= 2 ? ' — STREAK x' + state.deathStreak + ', mode panique au respawn' : ''))
@@ -333,6 +335,54 @@ function status (bot) {
   say(bot, '📊 Progression : ' + done.length + '/' + PHASES.length + ' phases (ateliers succès : ' + workshopsDone + '/6). Prochaine : ' + (next ? next.label : 'terminé !') + follow)
 }
 
+// ---------- Rattrapage adaptatif (catch-up) ----------
+// À la reprise d'une mission (« reprendre », redémarrage, items obtenus d'un
+// coffre/échange/don), INVENTAIRE et PROGRESSION prouvent que certaines phases
+// sont déjà « payées » : on les marque faites au lieu de re-récolter.
+// Contrats conservateurs (une phase n'est sautée que si ses PRODUITS clés sont
+// là) et évaluation MONOTONE dans l'ordre de la route : on s'arrête au premier
+// contrat non rempli pour ne jamais sauter des prérequis intermédiaires.
+function recoverPhasesFromInventory (bot, cfg, progress) {
+  const t = cfg.targets ?? {}
+  const n = (name) => countItem(bot, name)
+  const has = (name) => n(name) > 0
+  const pickAtLeast = (names) => names.some(has)
+  const minObsidian = cfg.rush ? 10 : 14
+  const powderEquivalents = n('blaze_powder') + n('blaze_rod') * 2
+  const contracts = [
+    // bois : une pioche = l'atelier bois/outils a forcément tourné
+    { key: 'bois', ok: pickAtLeast(['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) },
+    // pierre : pioche pierre+ ET de quoi faire le fourneau (sinon le four manque plus tard)
+    { key: 'pierre', ok: pickAtLeast(['stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) && (n('furnace') > 0 || n('cobblestone') + n('stone') >= 8) },
+    // fer : pioche fer+ ET de quoi faire briquet/seau (futurs prerequis du Nether)
+    { key: 'fer', ok: pickAtLeast(['iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) && (has('flint_and_steel') || n('iron_ingot') >= 3 || has('bucket')) },
+    // diamant : pioche diamant OU les diamants demandés déjà minés
+    { key: 'diamant', ok: has('diamond_pickaxe') || has('netherite_pickaxe') || n('diamond') >= (t.diamonds ?? 3) },
+    { key: 'obsidienne', ok: n('obsidian') >= minObsidian },
+    { key: 'base', ok: !!progress.home },
+    // nether : déjà de l'autre côté, ou portail déjà monté
+    { key: 'nether', ok: bot.game?.dimension === 'the_nether' || !!progress.netherPortal },
+    { key: 'forteresse', ok: !!progress.fortress },
+    // blazes : rods OU poudres déjà transformées (1 rod = 2 poudres)
+    { key: 'blazes', ok: n('blaze_rod') >= (t.blazeRods ?? 7) || powderEquivalents >= (t.blazeRods ?? 7) * 2 },
+    { key: 'perles', ok: n('ender_pearl') >= (t.enderPearls ?? 14) },
+    { key: 'yeux', ok: n('ender_eye') >= (t.enderEyes ?? 12) },
+    { key: 'stronghold', ok: !!progress.portalRoom }
+    // dragon : jamais sautée (le combat se rejoue)
+  ]
+  let skipped = 0
+  for (const c of contracts) {
+    if (!c.ok) break // monotone : on ne saute jamais "au milieu" d'une route
+    if (!progress.done.includes(c.key)) {
+      progress.done.push(c.key)
+      skipped++
+      log('⚡ Rattrapage : phase "' + c.key + '" déjà acquise (inventaire/progression) — je ne la refais pas')
+    }
+  }
+  if (skipped) say(bot, '⚡ Rattrapage intelligent : ' + skipped + ' phase(s) déjà acquise(s), je reprends plus loin')
+  return skipped
+}
+
 // ---------- Exécution de la mission ----------
 
 async function runMission (bot, cfg, { fromStart = false } = {}) {
@@ -347,6 +397,8 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
     // { done: [] } écrasait tout le fichier à la prochaine saveProgress.
     const progress = fromStart ? { ...loadProgress(), done: [] } : loadProgress()
     progress.done ??= []
+    // adaptatif : sauter les phases prouvées par l'inventaire/la progression
+    recoverPhasesFromInventory(bot, cfg, progress)
     // mode rush : seules les 13 phases de la mission dragon, pas les ateliers de succès
     const phases = cfg.rush ? PHASES.slice(0, 13) : PHASES
     for (const ph of phases) {
@@ -364,75 +416,75 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
           if (waitedFlee >= 600000) { log('⚠️ Fuite bloquée depuis > 10 min — je force la reprise'); bot._fleeing = false }
         }
       }
-      // Comportement joueur survival la nuit sans arme :
+      // Phases 100% sous terre : la nuit ne compte pas — les mobs de surface ne
+      // descendent pas, on ne perd pas 5 min à attendre le jour (bot moins « lazy »)
+      const UNDERGROUND_PHASES = { pierre: 1, fer: 1, diamant: 1, obsidienne: 1 }
+      // Comportement joueur survival la nuit sans arme (phases de surface uniquement) :
       // 1. Dormir dans un lit (avance le temps jusqu'au matin)
       // 2. Sinon abri d'urgence 3x3 + torche
       // 3. Fallback : pilier de 6 blocs
-      let waited = 0
-      let lastNightLog = 0
-      let shelterDone = false
-      while (isNight(bot) && !hasWeapon(bot) && waited < 300000 && !state.paused) {
-        if (Date.now() - lastNightLog > 30000) { lastNightLog = Date.now(); log("🌙 Nuit et pas d'arme — je me mets à l'abri…") }
-        if (!shelterDone) {
-          shelterDone = true
-          // 1. Lit dans l'inventaire → poser + dormir
-          const bed = bot.inventory.items().find(i => i.name.endsWith("_bed"))
-          if (bed) {
-            log("🛏️ Je pose mon lit et je dors jusqu'au matin")
-            try {
-              const { placeBlockFromInventory } = require("./utils")
-              const placed = await placeBlockFromInventory(bot, bed.name)
-              if (placed) {
-                await withTimeout(bot.sleep(placed), 15000)
-                let slept = 0
-                while (isNight(bot) && slept < 120000) { await sleep(2000); slept += 2000 }
-                try { await bot.wake() } catch {}
-                break
-              }
-            } catch (e) { log("dodo raté: " + e.message) }
+      if (isNight(bot) && !UNDERGROUND_PHASES[ph.key] && !hasWeapon(bot)) {
+        log('🌙 Nuit sans arme — solution rapide puis JE BOSSE QUAND MÊME')
+        // 0. La vraie réponse à la nuit : une arme de fortune (craft à la volée)
+        try {
+          const { craftItem } = require('./utils')
+          if (countItem(bot, 'stick') >= 1 && countItem(bot, 'cobblestone') >= 2) await craftItem(bot, 'stone_sword', 1)
+          else if (countItem(bot, 'stick') >= 1 && bot.inventory.items().some(i => i.name.endsWith('_planks') && i.count >= 2)) {
+            await craftItem(bot, 'wooden_sword', 1)
           }
-          // 2. Abri d'urgence 3x3 + torche
-          const blockName = ["dirt", "cobblestone", "stone", "oak_planks"].find(n => countItem(bot, n) >= 12)
-          if (blockName && countItem(bot, "torch") > 0) {
-            log("🏠 Abri d'urgence 3x3 + torche pour la nuit")
-            try {
-              const { placeBlockFromInventory } = require("./utils")
-              const base = bot.entity.position.floored()
-              const spots = []
-              for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-                if (Math.abs(dx) === 1 || Math.abs(dz) === 1) spots.push([dx, 0, dz], [dx, 1, dz], [dx, 2, dz])
-                spots.push([dx, 3, dz]) // toit
-              }
-              let placedCount = 0
-              for (const [dx, dy, dz] of spots) {
-                if (countItem(bot, blockName) <= 0) break
-                try {
-                  const target = base.offset(dx, dy, dz)
-                  const ground = bot.blockAt(target.offset(0, -1, 0))
-                  if (!isSolidBlock(ground)) continue
-                  if (bot.blockAt(target)?.name !== "air") continue
-                  await equipName(bot, blockName, "hand")
-                  await bot.lookAt(target.offset(0.5, 0.5, 0.5))
-                  await bot.placeBlock(ground, new Vec3(0, 1, 0))
-                  placedCount++
-                  await sleep(150)
-                } catch {}
-              }
-              try { await placeBlockFromInventory(bot, "torch") } catch {}
-              log("🏠 Abri posé: " + placedCount + " blocs")
-            } catch (e) {}
-          }
-          // 3. Fallback pilier
-          if (!blockName) {
-            const anyBlock = ["dirt", "cobblestone", "stone"].find(n => countItem(bot, n) > 5)
-            if (anyBlock) {
-              log("🧱 Pilier de secours pour la nuit")
-              try { await pillarUp(bot, bot.entity.position.y + 6, anyBlock) } catch {}
+        } catch (e) { log('craft arme de fortune raté : ' + e.message) }
+        // 1. Lit dans l'inventaire → poser + dormir (saute la nuit instantanément)
+        const bed = bot.inventory.items().find(i => i.name.endsWith('_bed'))
+        if (bed) {
+          try {
+            const { placeBlockFromInventory } = require('./utils')
+            const placed = await placeBlockFromInventory(bot, bed.name)
+            if (placed) {
+              await withTimeout(bot.sleep(placed), 15000)
+              let slept = 0
+              while (isNight(bot) && slept < 120000) { await sleep(2000); slept += 2000 }
+              try { await bot.wake() } catch {}
             }
+          } catch (e) { log('dodo raté: ' + e.message) }
+        }
+        // 2. Abri d'urgence 3x3 + torche : protection pendant qu'on travaille
+        const blockName = ['dirt', 'cobblestone', 'stone', 'oak_planks'].find(n => countItem(bot, n) >= 12)
+        if (blockName && countItem(bot, 'torch') > 0) {
+          log('🏠 Nuit : abri d\'urgence 3x3 + torche, puis au boulot')
+          try {
+            const { placeBlockFromInventory } = require('./utils')
+            const base = bot.entity.position.floored()
+            const spots = []
+            for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+              if (Math.abs(dx) === 1 || Math.abs(dz) === 1) spots.push([dx, 0, dz], [dx, 1, dz], [dx, 2, dz])
+              spots.push([dx, 3, dz]) // toit
+            }
+            let placedCount = 0
+            for (const [dx, dy, dz] of spots) {
+              if (countItem(bot, blockName) <= 0) break
+              try {
+                const target = base.offset(dx, dy, dz)
+                const ground = bot.blockAt(target.offset(0, -1, 0))
+                if (!isSolidBlock(ground)) continue
+                if (bot.blockAt(target)?.name !== 'air') continue
+                await equipName(bot, blockName, 'hand')
+                await bot.lookAt(target.offset(0.5, 0.5, 0.5))
+                await bot.placeBlock(ground, new Vec3(0, 1, 0))
+                placedCount++
+                await sleep(150)
+              } catch {}
+            }
+            try { await placeBlockFromInventory(bot, 'torch') } catch {}
+            log('🏠 Abri posé: ' + placedCount + ' blocs')
+          } catch (e) {}
+        // 3. Fallback pilier
+        } else {
+          const anyBlock = ['dirt', 'cobblestone', 'stone'].find(n => countItem(bot, n) > 5)
+          if (anyBlock) {
+            try { await pillarUp(bot, bot.entity.position.y + 6, anyBlock) } catch {}
           }
         }
-        await sleep(5000)
-        waited += 5000
+        log(isNight(bot) && !hasWeapon(bot) ? '🌙 Protection de nuit en place — je bosse quand même (le watchdog de survie couvre les mobs)' : '☀️ Nuit gérée — au boulot')
       }
       state.currentPhase = ph.key
       speedrun.setPhase(ph.key) // attribue les morts à la bonne phase dans la baseline
@@ -493,7 +545,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         }
         if (!ok) {
           chat(bot, 'phaseBlocked', { label: ph.label, attempts: strat.attempts }, { force: true })
-          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais. Dis-moi "reprendre" pour retenter.')
+          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais — je réessaierai seul dans 5 min Dis-moi "reprendre" pour retenter.')
+          state.autoResumeAt = Date.now() + 5 * 60000
+          log('🕒 auto-reprise programmée dans 5 min — le rattrapage inventaire profitera du temps écoulé')
           saveProgress(progress)
           return
         }
@@ -510,7 +564,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
       '📊 Dis "succès" pour le bilan complet des succès.'
     ])
     say(bot, '🏆 MISSION ACCOMPLIE : le dragon est mort et les ateliers de succès sont passés !')
-    if (cfg.rush) speedrun.finish(true, log) // 🏆 victoire speedrun : persiste le meilleur chrono
+    if (cfg.rush) speedrun.finish(true, log)
+    // cerveau : ferme autonome post-mission (récolte périodique des cultures posées)
+    try { require('./autofarm').startAutoFarm(bot) } catch (e) { log('autofarm: ' + e.message) } // 🏆 victoire speedrun : persiste le meilleur chrono
   } catch (err) {
     log(`erreur mission : ${err.stack}`)
     say(bot, `💥 Erreur inattendue : ${err.message}`)
@@ -598,6 +654,13 @@ async function handleCommand (bot, cfg, from, message) {
     else for (const row of b.phases) {
       say(bot, `📉 ${row.phase} : ${speedrun.fmt(row.avgDelta)} en moyenne (${speedrun.fmt(row.minDelta)}–${speedrun.fmt(row.maxDelta)}, n=${row.n}) — ${row.deaths} mort(s)`)
     }
+  } else if (/finrun|fin du run|endrun|cl[oô]ture/.test(msg)) {
+    // clôturer manuellement le run en cours : les splits réalisés alimentent la baseline
+    if (speedrun.isRunning()) {
+      const res = speedrun.finish(false, log)
+      const parts = Object.entries(res.phaseDeltas ?? {}).map(([k, ms]) => k + '=' + speedrun.fmt(ms))
+      say(bot, '⏹️ Run clôturé (⏱️ ' + speedrun.fmt(res.totalMs) + ') — splits enregistrés pour la baseline : ' + (parts.join(' ') || 'aucune phase terminée'))
+    } else say(bot, '⏹️ Aucun run en cours.')
   } else if (/chrono|speedrun|split|\btemps\b/.test(msg)) {
     const desc = speedrun.describe()
     say(bot, '⏱️ ' + desc)
@@ -617,7 +680,7 @@ async function handleCommand (bot, cfg, from, message) {
     // garder le reste de la progression (coordonnées, morts…) — même bug que fromStart avant
     saveProgress({ ...loadProgress(), done: [] })
     say(bot, '🔄 Progression remise à zéro.')
-  } else if (/(mission|dragon|go)/.test(msg)) {
+  } else if (/\b(mission|dragon|go)\b/.test(msg)) {
     if (!state.running) runMission(bot, cfg).catch((e) => log(e.stack))
   } else if (/mémoire|memoire|apprentissage|learn|skills/.test(msg)) {
     say(bot, `🧠 Mémoire : ${learn.summary()}`)
@@ -659,10 +722,13 @@ async function handleCommand (bot, cfg, from, message) {
     const p = bot.entity.position.floored()
     chat(bot, 'coords', { x: p.x, y: p.y, z: p.z, dim: bot.game?.dimension ?? '?' }, { force: true })
     say(bot, '📍 (' + p.x + ', ' + p.y + ', ' + p.z + ') — dimension ' + (bot.game?.dimension ?? '?'))
-  } else if (/(manger|eat)/.test(msg)) {
+  } else if (/\b(manger|eat)\b/.test(msg)) {
     await eatUntil(bot, 20)
     say(bot, `🍗 Faim ${Math.round(bot.food)}/20`)
+  } else {
+    // aucune commande reconnue - conversation libre avec le joueur
+    require('./conversation').reply(bot, from, message)
   }
 }
 
-module.exports = { runMission, handleCommand, handleDeath, fleeDeathSpot, waitSafe, recoverStuff, loadProgress, saveProgress, stopAll, followUser, stopFollowing, status, state, PHASES, applyRushTargets }
+module.exports = { runMission, recoverPhasesFromInventory, handleCommand, handleDeath, fleeDeathSpot, waitSafe, recoverStuff, loadProgress, saveProgress, stopAll, followUser, stopFollowing, status, state, PHASES, applyRushTargets }

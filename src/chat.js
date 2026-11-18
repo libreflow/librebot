@@ -254,6 +254,20 @@ const ALWAYS_CHAT = new Set([
   'follow', 'stopFollow', 'pause', 'resume', 'error', 'status'
 ])
 
+// ---------- Filtre de sécurité des sorties chat ----------
+// Le bot ne doit JAMAIS envoyer d'insulte, même si une erreur brute ou un texte
+// interpolé contient un terme offensant : on bloque et on log localement.
+const INSULT_RE = /\b(connard|salope|salop|pute|putain|merde|encul|ta\s*gueuele|d[ée]bile|cr[ée]tin|imb[ée]cile|minable|batard|bâtar|nique\s+ta\s+m[èe]re)/i
+function safeChat (bot, msg) {
+  const text = String(msg ?? '')
+  if (INSULT_RE.test(text)) {
+    log('🚫 [chat-filtre] message sortant bloqué (contenu offensant) : ' + text.slice(0, 120))
+    return false
+  }
+  bot.chat(text)
+  return true
+}
+
 // ---------- Anti-spam ----------
 let _lastChatByCat = {} // cat -> timestamp
 let _lastChatMsg = ''
@@ -302,7 +316,7 @@ function chat (bot, category, data = {}, { force = false } = {}) {
   _lastGlobalChat = now
   _lastChatMsg = msg
 
-  try { bot.chat(msg) } catch {}
+  try { safeChat(bot, msg) } catch {}
   return msg
 }
 
@@ -311,14 +325,14 @@ function chat (bot, category, data = {}, { force = false } = {}) {
 const CHAT_IMPORTANT = [/━━━/, /✅/, /⛔/, /🏆/, /☠️/, /😨/, /👣/, /🛑/, /💥/, /🔄/, /⏸️/, /▶️/, /📊/, /🌌/, /🌋/, /🌍/, /⚔️/, /🏹/, /💀/, /🔥/, /🏠/, /🚀/, /⛏️/, /📦/, /🌲/, /🧭/, /❤️/, /💧/, /🪂/, /🔨/]
 function say (bot, msg) {
   log(msg)
-  if (process.env.LIBREBOT_CHAT_VERBOSE) { try { bot.chat(String(msg)) } catch {}; return }
+  if (process.env.LIBREBOT_CHAT_VERBOSE) { try { safeChat(bot, String(msg)) } catch {}; return }
   const now = Date.now()
   if (now - _lastGlobalChat < MIN_INTERVAL_GLOBAL) return // anti-spam même pour say()
   try {
     if (CHAT_IMPORTANT.some((r) => r.test(msg))) {
       _lastGlobalChat = now
       _lastChatMsg = msg
-      bot.chat(String(msg))
+      safeChat(bot, String(msg))
     }
   } catch {}
 }
@@ -359,9 +373,9 @@ function proactive (bot, action) {
 function announce (bot, lines) {
   let i = 0
   for (const line of lines) {
-    setTimeout(() => { try { bot.chat(line) } catch {} }, i * 1500)
+    setTimeout(() => { try { safeChat(bot, line) } catch {} }, i * 1500)
     i++
   }
 }
 
-module.exports = { chat, say, log, logThrottle, proactive, announce, pick, MESSAGES, ALWAYS_CHAT, getLastLogAt: () => lastLogAt }
+module.exports = { chat, say, log, logThrottle, proactive, announce, pick, MESSAGES, ALWAYS_CHAT, safeChat, getLastLogAt: () => lastLogAt }

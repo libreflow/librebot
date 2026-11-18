@@ -7,7 +7,7 @@ const {
   equipBestSword, pillarUp, digBlock,
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
-  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock,
+  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock, ensureBridgeBlocks,
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests,
   digGravelForFlint, trackEyeOfEnder
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
@@ -83,8 +83,25 @@ async function phaseWood (bot, cfg, progress) {
 async function phaseStone (bot, cfg, progress) {
   say(bot, '🪨 Phase 2 : outils en pierre')
   const rush = !!cfg.rush
-  // rush : 12 cobble suffisent (pioche 3 + fourneau 8 + marge)
-  await collectBlocks(bot, ['stone', 'cobblestone'], rush ? 12 : 64, { maxDistance: 96, maxMinutes: rush ? 3 : 8 })
+  // adaptatif : ne pas re-miner la pierre déjà en stock
+  const haveStone = countItem(bot, 'cobblestone') + countItem(bot, 'stone')
+  if (haveStone < (rush ? 12 : 64)) {
+    // rush : 12 cobble suffisent (pioche 3 + fourneau 8 + marge)
+    await collectBlocks(bot, ['stone', 'cobblestone'], rush ? 12 : 64, { maxDistance: 96, maxMinutes: rush ? 3 : 8 })
+  } else {
+    say(bot, '⚡ ' + haveStone + ' blocs de pierre déjà en stock — je passe le minage')
+  }
+  // RÉSILIENCE reprise : la phase bois est souvent marquée « faite » (pioche en bois
+  // conservée) alors qu'il ne reste NI bûche NI planche en inventaire — les bâtons
+  // sont alors infabricables et toute la chaîne pierre échoue (« missing ingredient »).
+  const PLANK_NAMES = ['oak_planks', 'birch_planks', 'spruce_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks', 'pale_oak_planks']
+  const LOG_NAMES = PLANK_NAMES.map((p) => p.replace('_planks', '_log'))
+  const anyCount = (list) => list.reduce((a, n) => a + countItem(bot, n), 0)
+  if (countItem(bot, 'stick') < 2 && anyCount(PLANK_NAMES) === 0 && anyCount(LOG_NAMES) === 0) {
+    say(bot, '⚡ Ni bâtons ni bois en stock — je coupe une bûche express (reprise)')
+    await collectBlocks(bot, LOG_NAMES, 1, { maxDistance: 64, maxMinutes: 2 })
+  }
+  if (countItem(bot, 'stick') < 2) await craftItem(bot, 'stick', 2)
   await craftItem(bot, 'stone_pickaxe', 1)
   if (!rush) {
     await craftItem(bot, 'stone_axe', 1)
@@ -100,16 +117,25 @@ async function phaseStone (bot, cfg, progress) {
 async function phaseIron (bot, cfg, progress) {
   say(bot, '⛏️ Phase 3 : le fer (descente vers Y=16)')
   const rush = !!cfg.rush
-  await getWaterBucket(bot) // seau d'eau gardé pour l'obsidienne
+  // adaptatif : le besoin compte AUSSI les lingots déjà fondus (butin de coffre,
+  // reprise de run) — sinon on re-minait du fer alors qu'on en a déjà
+  const ironTotal = () => countItem(bot, 'raw_iron') + countItem(bot, 'iron_ingot')
+  // ORDRE CORRIGÉ : le seau nécessite 3 lingots — le crafter AVANT le minage
+  // échouait (« missing ingredient » si 0 fer) et bloquait la phase instantanément.
+  // On mine/font d'abord, le seau est fabriqué/rempli avec les lingots produits.
   await digStaircase(bot, 16)
-  const ok = await branchMine(bot, {
-    y: 16,
-    need: () => countItem(bot, 'raw_iron') >= cfg.targets.rawIron,
-    ores: ['iron_ore', 'deepslate_iron_ore'],
-    extraOres: ['coal_ore', 'deepslate_coal_ore'],
-    maxMinutes: rush ? 10 : 25
-  })
-  if (!ok) throw new Error('pas assez de fer trouvé')
+  if (ironTotal() >= cfg.targets.rawIron) {
+    say(bot, '⚡ ' + ironTotal() + ' unités de fer en stock (mineraï + lingots) — je passe le minage')
+  } else {
+    const ok = await branchMine(bot, {
+      y: 16,
+      need: () => ironTotal() >= cfg.targets.rawIron,
+      ores: ['iron_ore', 'deepslate_iron_ore'],
+      extraOres: ['coal_ore', 'deepslate_coal_ore'],
+      maxMinutes: rush ? 10 : 25
+    })
+    if (!ok) throw new Error('pas assez de fer trouvé')
+  }
   say(bot, '🔥 Fonte du fer…')
   await smeltItem(bot, 'raw_iron', 'iron_ingot', cfg.targets.rawIron)
   // rush : pas d'armure en fer (24 lingots perdus), juste l'essentiel
@@ -127,9 +153,33 @@ async function phaseIron (bot, cfg, progress) {
   }
   // SPEEDRUN : 1 seul seau (on le reremplit à l'eau après l'obsidienne), flèches/torches réduites
   await craftItem(bot, 'bucket', rush ? 1 : 2)
-  await digGravelForFlint(bot, rush ? 2 : 10)
+  await getWaterBucket(bot) // remplir d'eau (seau crafté ci-dessus avec le fer miné)
+  const arrows = rush ? 8 : 32
+  const arrowCrafts = Math.ceil(arrows / 4) // 1 flint + 1 plume + 1 bâton = 4 flèches
+  // plumes : en rush la chasse aux poules de la phase 1 est sautée — sans ça,
+  // craftItem('arrow') throw systématiquement (« feather ne se craft pas »)
+  if (countItem(bot, 'feather') < arrowCrafts) {
+    say(bot, '🏹 Il me faut ' + arrowCrafts + ' plume(s) pour les flèches — chasse aux poules express')
+    await huntMob(bot, ['chicken'], {
+      until: () => countItem(bot, 'feather') >= arrowCrafts,
+      maxMinutes: rush ? 3 : 6
+    })
+    if (countItem(bot, 'feather') < arrowCrafts) say(bot, '⚠️ Pas assez de plumes — je tenterai les flèches avec ce qu\'il y a')
+  }
+  await digGravelForFlint(bot, Math.max(arrowCrafts + 1 - countItem(bot, 'flint'), 0)) // +1 pour le briquet
   await craftItem(bot, 'flint_and_steel', 1)
-  await craftItem(bot, 'arrow', rush ? 8 : 32) // silex + bâton + plume
+  if (countItem(bot, 'feather') >= arrowCrafts) await craftItem(bot, 'arrow', arrows) // silex + bâton + plume
+  // ARC : indispensable pour détruire les cristaux de l'End et blesser le dragon à
+  // distance — il n'était JAMAIS crafté par aucune phase (le run finissait à pieds
+  // nus devant les cristaux). 3 ficelles via mini-chasse aux araignées.
+  if (countItem(bot, 'bow') === 0) {
+    if (countItem(bot, 'string') < 3) {
+      say(bot, '🕷️ Il me faut 3 ficelles pour l\'arc — chasse aux araignées express')
+      await huntMob(bot, ['spider'], { until: () => countItem(bot, 'string') >= 3, maxMinutes: rush ? 3 : 5 })
+    }
+    if (countItem(bot, 'string') >= 3) await craftItem(bot, 'bow', 1)
+    else say(bot, '⚠️ Pas de ficelle — je tenterai l\'arc plus tard (cristaux sans arc = risque)')
+  }
   await craftItem(bot, 'torch', rush ? 8 : 32)
   await eatUntil(bot, rush ? 12 : 18)
 }
@@ -139,15 +189,19 @@ async function phaseIron (bot, cfg, progress) {
 async function phaseDiamond (bot, cfg, progress) {
   say(bot, '💎 Phase 4 : les diamants (descente vers Y=-58)')
   const rush = !!cfg.rush
-  await digStaircase(bot, -58)
-  const ok = await branchMine(bot, {
-    y: -58,
-    need: () => countItem(bot, 'diamond') >= cfg.targets.diamonds,
-    ores: ['diamond_ore', 'deepslate_diamond_ore'],
-    extraOres: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'],
-    maxMinutes: rush ? 15 : 45
-  })
-  if (!ok) throw new Error('pas assez de diamants trouvés (mauvaise chance…)')
+  if (countItem(bot, 'diamond') >= cfg.targets.diamonds) {
+    say(bot, '⚡ Diamants déjà en stock — je passe le minage')
+  } else {
+    await digStaircase(bot, -58)
+    const ok = await branchMine(bot, {
+      y: -58,
+      need: () => countItem(bot, 'diamond') >= cfg.targets.diamonds,
+      ores: ['diamond_ore', 'deepslate_diamond_ore'],
+      extraOres: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'],
+      maxMinutes: rush ? 15 : 45
+    })
+    if (!ok) throw new Error('pas assez de diamants trouvés (mauvaise chance…)')
+  }
   // rush : 5 diamants = pioche (3) + épée (2), pas d'armure diamant
   if (!rush) {
     for (const piece of ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots']) {
@@ -218,13 +272,38 @@ async function phaseFortress (bot, cfg, progress) {
   say(bot, '🏰 Phase 8 : recherche de la forteresse')
   const bricksId = md(bot).blocksByName.nether_bricks?.id
   if (!bricksId) throw new Error('nether_bricks inconnu pour cette version — forteresse introuvable')
+  // PRÉCAUTION NETHER : les passerelles de forteresse surplombent la lave —
+  // garantir des blocs pour bâtir/relier avant d'explorer (ici, du netherrack local)
+  try { await ensureBridgeBlocks(bot, 32) } catch {}
+  // MÉMOIRE d'abord : une forteresse déjà vue (run précédent, mort ici) est retournée
+  // directement en cohérence avec progress.fortress conservé à la mort
+  if (progress.fortress) {
+    say(bot, '🧠 Je connais déjà une forteresse (' + progress.fortress[0] + ', ' + progress.fortress[2] + ')')
+    await goTo(bot, new GoalNear(progress.fortress[0], progress.fortress[1], progress.fortress[2], 3), { timeout: 180000, retries: 1 }).catch(() => {})
+    const found = bot.findBlocks({ matching: bricksId, maxDistance: 48, count: 6 })
+    if (found.length) {
+      progress.fortress = [found[0].x, found[0].y, found[0].z]
+      chat(bot, 'chestFound', { dist: Math.round(found[0].distanceTo(bot.entity.position)) })
+      try { await lootNearbyChests(bot, 48, 5) } catch {}
+      return
+    }
+  }
+  // EXPLORATION PROGRESSIVE : avant, des marches aléatoires ±150 blocs qui
+  // pouvaient tourner en rond ; maintenant une spirale croissante autour du
+  // portail (rayon × 1.3 à chaque tour), qui balaye tout le Nether proche
+  const anchor = progress.netherPortal ? { x: progress.netherPortal[0], z: progress.netherPortal[2] } : { x: bot.entity.position.x, z: bot.entity.position.z }
   let fortress = null
+  let radius = 150
+  let angle = Math.random() * Math.PI * 2
   for (let i = 0; i < 40 && !fortress; i++) {
     const spots = bot.findBlocks({ matching: bricksId, maxDistance: 96, count: 6 })
     if (spots.length) fortress = spots[0]
     else {
-      const { x, z } = bot.entity.position
-      await goTo(bot, new GoalXZ(x + (Math.random() * 2 - 1) * 150, z + (Math.random() * 2 - 1) * 150), { timeout: 90000, retries: 0 })
+      const tx = anchor.x + Math.cos(angle) * radius
+      const tz = anchor.z + Math.sin(angle) * radius
+      angle += Math.PI / 3 // 6 points de spirale par tour
+      radius *= 1.08
+      await goTo(bot, new GoalXZ(tx, tz), { timeout: 90000, retries: 0 })
     }
     if (bot.health < 14) await eatUntil(bot)
   }
@@ -233,6 +312,8 @@ async function phaseFortress (bot, cfg, progress) {
   say(bot, '🏰 Forteresse repérée en (' + fortress.x + ', ' + fortress.y + ', ' + fortress.z + ')')
   await goTo(bot, new GoalNear(fortress.x, fortress.y, fortress.z, 2), { timeout: 120000, retries: 1 })
   progress.fortress = [fortress.x, fortress.y, fortress.z]
+  // mémoriser pour les runs futurs (le cerveau y reviendra directement)
+  learn.recordDiscovery('fortress', fortress)
   // looter les coffres de la forteresse au passage
   try { await lootNearbyChests(bot, 48, 5) } catch {}
 }
@@ -278,6 +359,7 @@ async function phasePearls (bot, cfg, progress) {
   if (cfg.rush) {
     const t0 = Date.now()
     let hid = false
+    const surfaceY = Math.floor(bot.entity.position.y) // pour ressortir du trou ensuite
     while (!isNightLocal(bot) && Date.now() - t0 < 4 * 60000) {
       if (!hid) {
         hid = true
@@ -293,6 +375,24 @@ async function phasePearls (bot, cfg, progress) {
       }
       await sleep(5000)
       if (nearestHostileLocal(bot, 8)) break // un mob entre : on sort chasser quand même
+    }
+    // ressortir du trou : sans ça le bot restait coincé 2 blocs sous terre et
+    // chassait les endermen sans les atteindre
+    if (bot.entity.position.y < surfaceY - 0.5) {
+      const climb = countItem(bot, 'cobblestone') > 0 ? 'cobblestone' : (countItem(bot, 'dirt') > 0 ? 'dirt' : null)
+      if (climb) {
+        try { await pillarUp(bot, surfaceY + 1, climb) } catch (e) { log('⚠️ ressortie du trou ratée : ' + e.message) }
+      } else {
+        // pas de blocs : creuser un escalier de secours vers le haut
+        for (let dy = 0; dy < 4 && bot.entity.position.y < surfaceY; dy++) {
+          try {
+            const { digBlock } = require('./utils')
+            const p2 = bot.entity.position.floored().offset(0, 1, 0)
+            const blk = bot.blockAt(p2)
+            if (blk && isSolidBlock(blk) && blk.name !== 'bedrock') await digBlock(bot, blk, 4000).catch(() => {})
+          } catch {}
+        }
+      }
     }
   }
   const ok = await huntMob(bot, ['enderman'], {
@@ -385,11 +485,18 @@ async function seekStronghold (bot, progress) {
       say(bot, `🎯 Triangulation : stronghold estimé en (${Math.round(inter[0])}, ${Math.round(inter[1])})`)
       progress.strongholdXZ = inter
       await goTo(bot, new GoalXZ(inter[0], inter[1]), { timeout: 300000, retries: 1 })
-      // confirmation par un 3ème lancer sur place
-      const confirm = await throwEye(bot)
-      if (Math.hypot(confirm.to[0] - confirm.from[0], confirm.to[1] - confirm.from[1]) < 30) {
-        say(bot, '📍 L\'œil retombe près de moi : le stronghold est juste en dessous !')
-        progress.strongholdXZ = [bot.entity.position.x, bot.entity.position.z]
+      // confirmation ITÉRATIVE : tant que l'œil vole loin, l'estimation était fausse —
+      // on suit sa trajectoire au lieu de figer une cible potentiellement à des centaines de blocs
+      for (let tries = 0; tries < 3; tries++) {
+        const confirm = await throwEye(bot)
+        const flight = Math.hypot(confirm.to[0] - confirm.from[0], confirm.to[1] - confirm.from[1])
+        if (flight < 30) {
+          say(bot, '📍 L\'œil retombe près de moi : le stronghold est juste en dessous !')
+          progress.strongholdXZ = [bot.entity.position.x, bot.entity.position.z]
+          return
+        }
+        progress.strongholdXZ = confirm.to
+        await goTo(bot, new GoalXZ(confirm.to[0], confirm.to[1]), { timeout: 300000, retries: 1 })
       }
       return
     }
@@ -501,6 +608,8 @@ function isCaged (bot, pos) {
 
 async function gotoEndIsland (bot) {
   say(bot, '🌉 Je rejoins l\'île principale…')
+  // PRÉCAUTION END : le vide est mortel — réserve de blocs pour les ponts
+  try { await ensureBridgeBlocks(bot, 32) } catch {}
   await goTo(bot, new GoalXZ(0, 0), { timeout: 120000, retries: 1 })
   await sleep(1000)
 }

@@ -22,7 +22,7 @@ function fmt (ms) {
 function isRunning () { return !!run }
 
 function startRun (log) {
-  run = { startMs: Date.now(), splits: {}, order: [], deaths: 0, deathsByPhase: {}, phase: null }
+  run = { startMs: Date.now(), splits: {}, order: [], done: 0, deaths: 0, deathsByPhase: {}, phase: null }
   if (log) log('⏱️ SPEEDRUN lancé — any% legit, objectif : le dragon le plus vite possible !')
   return run
 }

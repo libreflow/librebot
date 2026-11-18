@@ -78,10 +78,20 @@ function versionAtLeast (v, ref) {
 
 // Fallback automatique : si la cible principale est down (ECONNREFUSED…),
 // on bascule sur l'autre (LAN <-> Aternos) au lieu de boucler sur rien.
-function createBot () {
-  const tgt = target.resolve(config)
+async function createBot () {
+  let tgt = target.resolve(config)
+  if (!tgt && config.lan) {
+    // Aucun port dans les logs/client : on écoute les annonces Open-to-LAN
+    // (multicast 224.0.2.60:4445) — fonctionne avec n'importe quel port local
+    log('🔍 Pas de port LAN dans les logs — j\'écoute les annonces "Ouvrir au réseau local" (6 s)…')
+    const port = await require('./lan').listenLanAnnounce(6000)
+    if (port) {
+      tgt = { host: config.lanHost || '127.0.0.1', port, lan: true }
+      log('📡 Monde LAN découvert automatiquement : port ' + port)
+    }
+  }
   if (!tgt) {
-    log('⛔ config.lan = true mais aucun monde solo ouvert au LAN détecté.')
+    log('⛔ config.lan = true mais aucun monde solo ouvert au LAN détecté (logs + multicast).')
     log('   → Ouvre ton monde : Échap → "Ouvrir au réseau local". Nouvelle tentative dans 15 s…')
     if (!target.getAlt() && config.fallback !== false) { target.setAlt(true); log('   → LAN indisponible, je bascule sur Aternos (' + (config.aternosHost || config.host) + ':' + (config.aternosPort || config.port) + ')') }
     setTimeout(createBot, 15000)
@@ -213,6 +223,12 @@ function createBot () {
             const idle = Date.now() - require('./chat').getLastLogAt()
             if (idle > 150000) {
               try { bot.pathfinder.stop() } catch {}
+              // auto-reprise programmée après un blocage de phase : le bot retente seul
+              if (!state.running && state.autoResumeAt && Date.now() > state.autoResumeAt) {
+                state.autoResumeAt = null
+                log('🕒 Auto-reprise : je relance la mission (retour avec rattrapage inventaire)')
+                runMission(bot, config).catch((e) => log('mission error : ' + e.message))
+              }
               try { bot.pvp.stop() } catch {}
               try { bot.clearControlStates() } catch {}
               // un avertissement max tous les 150 s (avant : spam toutes les 20 s quand la mission était bloquée)
@@ -342,6 +358,19 @@ function createBot () {
     if (bot._farmTimer) { clearInterval(bot._farmTimer); bot._farmTimer = null }
     if (bot._poiTimer) { clearInterval(bot._poiTimer); bot._poiTimer = null }
     try { require('./survie').stopPanic() } catch {} // stoppe le timer de panique global (fuite sinon)
+    // CRITIQUE reconnexion : la boucle mission ne survit PAS à une déconnexion —
+    // si une phase attendait (goTo pendant la coupure), state.running restait true
+    // pour toujours et l'auto-mission croyait que ça tournait : le bot reprenait
+    // « son objectif » gelé sans jamais se réadapter. On force l'état à l'arrêt :
+    // le respawn relancera runMission, qui réévalue le rattrapage inventaire.
+        // Sauvegarde du run speedrun en cours : une déconnexion ne doit pas perdre les splits
+    // déjà réalisés (le run est clos comme « interrompu » — donnée réelle pour la baseline).
+    try { const sr = require('./speedrun'); if (sr.isRunning()) sr.finish(false, require('./chat').log) } catch {}
+if (state.running) {
+      state.running = false
+      state.autoResumeAt = null
+      log('🔄 Mission interrompue par la déconnexion — elle sera relancée au reconnect (avec rattrapage inventaire)')
+    }
     // idem pour l'état de follow (timer + cible peuvent référencer l'ancien bot)
     if (state.followTimer) { clearInterval(state.followTimer); state.followTimer = null }
     state.following = null

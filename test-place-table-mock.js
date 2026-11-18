@@ -64,6 +64,23 @@ const main = async () => {
   try { await utils.placeBlockFromInventory(b3, 'crafting_table') } catch (e) { threw = e.message.includes('aucun emplacement') }
   check(threw, 'mur de pierre autour : échec explicite conservé (pas de pose à travers)')
 
+  // Scénario cave luxuriante : aucun emplacement idéal (sol hors de portée/LOS bloquée),
+  // mais du sol solide sous les pieds → passe 3 : sauter et poser sous soi
+  const world4 = { '0,69,0': dirt }
+  const placed4 = []
+  const b4 = Object.assign(buildBot(world4).bot, {
+    setControlState: (st, on) => { b4._states = b4._states || {}; b4._states[st] = on },
+    placeBlock: async (ground, face) => {
+      const at = ground.position.clone().plus(face)
+      placed4.push(at)
+      world4[`${at.x},${at.y},${at.z}`] = { name: 'crafting_table', boundingBox: 'block', hardness: 2.5 }
+    }
+  })
+  const res4 = await utils.placeBlockFromInventory(b4, 'crafting_table')
+  check(placed4.length === 1 && placed4[0].x === 0 && placed4[0].y === 70, 'cave luxuriante : table pos\u00e9e sous les pieds (passe 3, saut + pose)')
+  check(res4 && res4.name === 'crafting_table', 'la table est retourn\u00e9e comme bloc pos\u00e9')
+  check(b4._states && b4._states.jump === false, 'le bouton saut est rel\u00e2ch\u00e9 apr\u00e8s la pose')
+
   console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
   process.exit(fails === 0 ? 0 : 1)
 }

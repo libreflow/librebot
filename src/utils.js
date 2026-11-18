@@ -121,22 +121,32 @@ async function equipName (bot, name, dest = 'hand') {
 // ---------- Déplacements ----------
 
 function setMovements (bot) {
-  // cache : recréer un Movements à chaque appel est inutile et coûteux
-  if (bot._librebotMovements) {
-    bot.pathfinder.setMovements(bot._librebotMovements)
-    if (bot.collectBlock) bot.collectBlock.movements = bot._librebotMovements
-    return
+  // cache PAR DIMENSION : les garde-fous du Nether ne doivent pas s'appliquer
+  // à l'overworld (et réciproquement). Avant, un seul objet Movements servait partout,
+  // créé dans la première dimension visitée.
+  const dim = bot.game?.dimension ?? 'overworld'
+  if (!bot._librebotMovementsByDim) bot._librebotMovementsByDim = {}
+  let movements = bot._librebotMovementsByDim[dim]
+  if (!movements) {
+    movements = new Movements(bot)
+    movements.canDig = true
+    movements.allowSprinting = true
+    movements.allowParkour = true
+    // NOTE : movements.maxDropHeight n'existe PAS dans mineflayer-pathfinder 2.4.5
+    // (vérifié dans lib/movements.js) — l'assigner était silently ignoré. La protection
+    // contre les chutes > 3 blocs est assurée par le watchdog de survie (survie.js,
+    // détection de chute libre + pose d'un bloc d'amortissement) et par walkDirect
+    // (détection de trou devant). On évite juste la lave via blocksToAvoid (défaut).
+    movements.allow1by1towers = true // peut pillar 1x1 si besoin
+    if (dim === 'the_nether') {
+      // GARDE-FOU NETHER (exigé par le workflow speedrun) : pas de sauts parkour —
+      // un atterrissage manqué = lac de lave. Les autres mouvements restent sûrs :
+      // le pathfinder ne pose jamais le bot sur/à côté d'un liquide de toute façon
+      movements.allowParkour = false
+      movements.allowSprinting = true // sprint sol/plafond ok
+    }
+    bot._librebotMovementsByDim[dim] = movements
   }
-  const movements = new Movements(bot)
-  movements.canDig = true
-  movements.allowSprinting = true
-  movements.allowParkour = true
-  // NOTE : movements.maxDropHeight n'existe PAS dans mineflayer-pathfinder 2.4.5
-  // (vérifié dans lib/movements.js) — l'assigner était silently ignoré. La protection
-  // contre les chutes > 3 blocs est assurée par le watchdog de survie (survie.js,
-  // détection de chute libre + pose d'un bloc d'amortissement) et par walkDirect
-  // (détection de trou devant). On évite juste la lave via blocksToAvoid (défaut).
-  movements.allow1by1towers = true // peut pillar 1x1 si besoin
   bot.pathfinder.setMovements(movements)
   // A* plus rapide : 100 ms de calcul par tick (au lieu de 50) divise par ~2
   // le nombre de ticks nécessaires, donc le temps réel pour trouver un chemin.
@@ -147,7 +157,7 @@ function setMovements (bot) {
   if (bot.collectBlock) {
     bot.collectBlock.movements = movements
   }
-  bot._librebotMovements = movements
+  bot._librebotMovements = movements // rétrocompat
 }
 
 // Extrait le point visé par un goal pathfinder (GoalNear / GoalBlock / GoalXZ)
@@ -214,12 +224,15 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
   let lastDig = 0
   let strafeUntil = 0
   let strafeDir = 1
+  let jumpsSinceMove = 0 // budget de sauts depuis le dernier mouvement réel
+  let lastJumpAt = 0 // impulsion : saut ON puis OFF, pas maintenu
+  let strafeCount = 0 // contournements tentés avant d'abandonner
   let lastDbg = 0
   let lastLook = 0 // lookAt throttle : 1 paquet réseau toutes les 300 ms, pas 10/s
   const clear = () => { for (const s of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) bot.setControlState(s, false) }
   try {
     while (Date.now() - t0 < timeoutMs) {
-      if ((bot._fleeing && !ignoreFlee) || _moveAbort) return false
+      if (bot._fleeing && !ignoreFlee) return false
       const pos = bot.entity.position
       const d2 = Math.hypot(target.x - pos.x, target.z - pos.z)
       // arrivé = à côté horizontalement (un joueur ne vise pas le même Y exact)
@@ -255,11 +268,24 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
         log(`🚶 pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)}) dist=${d2.toFixed(1)} yaw=${(bot.entity.yaw ?? 0).toFixed(2)} stuck=${Date.now() - lastMove}ms`)
       }
       // blocage = aucun mouvement HORIZONTAL (le saut vertical ne compte pas)
-      if (Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z) > 0.2) { lastPos = pos.clone(); lastMove = Date.now() }
+      if (Math.hypot(pos.x - lastPos.x, pos.z - lastPos.z) > 0.2) {
+        lastPos = pos.clone()
+        lastMove = Date.now()
+        jumpsSinceMove = 0 // mouvement réel : on remet le budget de sauts à zéro
+        strafeCount = 0
+      }
       const stuckFor = Date.now() - lastMove
       if (inWater) bot.setControlState('jump', true) // nage : remonter à la surface pour respirer
       if (stuckFor > 1200 || holeAhead) {
-        bot.setControlState('jump', true) // sauter l'obstacle / le petit trou
+        // SAUT EN IMPULSIONS BORNÉES : avant, jump restait true tant qu'on était
+        // « bloqué » → si l'obstacle était infranchissable (toit, mur haut), le bot
+        // SAUTAIT SUR PLACE indéfiniment (aucun mouvement horizontal = jamais
+        // débloqué). Maintenant : max 3 impulsions de saut, sinon on passe au
+        // contournement puis on rend la main au pathfinder.
+        if (Date.now() - lastJumpAt > 650) {
+          if (jumpsSinceMove < 3 && !inWater) { jumpsSinceMove++; lastJumpAt = Date.now(); bot.setControlState('jump', true) }
+          else bot.setControlState('jump', false)
+        } else if (Date.now() - lastJumpAt > 260) bot.setControlState('jump', false)
         if (obstacle && stuckFor > 2500 && Date.now() - lastDig > 1500) {
           // re-vérifier que l'obstacle est toujours solide (sinon dig bloque = tape dans le vide)
           const freshObstacle = bot.blockAt(obstacle.position)
@@ -269,15 +295,21 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
             await digBlock(bot, freshObstacle, 3000).catch(() => {})
           }
         }
-        // très bloqué : contourner sur le côté comme un joueur
-        if (stuckFor > 3500 && Date.now() > strafeUntil) {
+        // CONTOURNEMENT BORNÉ : avant, l'alternance gauche/droite se répétait
+        // indéfiniment tant que le bot restait « bloqué » → le fameux MOONWALK.
+        // Maintenant : 2 tentatives de contournement, puis on rend la main au
+        // pathfinder (qui sait creuser/poser des blocs) au lieu de danser.
+        if (stuckFor > 3500 && Date.now() > strafeUntil && strafeCount < 2) {
           strafeDir = -strafeDir
-          strafeUntil = Date.now() + 900
+          strafeUntil = Date.now() + 800
+          strafeCount++
         }
-        // grand trou devant et toujours coincé longtemps : abandon (le pathfinder tranchera).
-        // Seuil relevé (depth 5, 10 s) : avant on abandonnait trop tôt et le pathfinder
-        // mettait 20 s à calculer → "délai dépassé" global.
-        if (depth >= 5 && stuckFor > 10000) return false
+        // abandon raisonné — le pathfinder bâtit/minera un vrai chemin :
+        // - trou profond : inutile de sauter dedans, il faut un pont (le pathfinder en pose)
+        // - bloqué malgré sauts + contournements + minage : this walkDirect n'aboutira pas
+        if (depth >= 3 && !holeAhead && stuckFor > 3000) return false
+        if (depth >= 5) return false // (les ponts sont son affaire, pas la notre)
+        if (stuckFor > 6000 && jumpsSinceMove >= 3 && strafeCount >= 2) return false
       } else {
         bot.setControlState('jump', false)
       }
@@ -302,12 +334,24 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
 // survie + la mission + la fuite post-mort lancent des goTo concurrents qui
 // s'annulent mutuellement ("The goal was changed before it could be completed").
 let _moveChain = Promise.resolve()
-let _moveAbort = false
 function goTo (bot, goal, opts = {}) {
   const run = _moveChain.then(async () => {
-    _moveAbort = false
     if (opts.force) { try { bot.pathfinder.stop() } catch {} }
-    return await _goTo(bot, goal, opts)
+    const res = await _goTo(bot, goal, opts)
+    // cerveau : mémoriser la fiabilité du trajet (de A vers B réussi ou raté) —
+    // sert à logger les chemins peu fiables et à adapter les efforts futurs
+    try {
+      const from = bot.entity?.position?.floored()
+      const t = goalPoint(bot, goal)
+      if (from && t) {
+        map.recordPath(from.x, from.z, t.x, t.z, res === true)
+        const rel = map.pathReliability(from.x, from.z, t.x, t.z)
+        if (res !== true && rel !== null && rel < 0.3) {
+          logThrottle('pathmem', '🧠 trajet vers (' + Math.round(t.x) + ', ' + Math.round(t.z) + ') peu fiable (' + Math.round(rel * 100) + '% de réussite) — mémorisé', 30000)
+        }
+      }
+    } catch {}
+    return res
   })
   _moveChain = run.catch(() => {})
   return run
@@ -350,9 +394,11 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
   let lastErr = null
   for (let i = 0; i <= retries; i++) {
     if (bot._fleeing && !force) { log('🏃 fuite en cours — trajet annulé'); return false }
-    // 1er essai 20 s de calcul A* (12 s c'était trop court sur 60+ blocs avec obstacles),
-    // puis 30 s au 2ème essai
-    bot.pathfinder.thinkTimeout = Math.min(i === 0 ? 20000 : 30000, Math.max(5000, remaining()))
+    // court trajet (< 24 blocs) : pas besoin de 20 s de calcul A* — si la marche directe
+    // a échoué à quelques blocs, la cible est presque toujours infranchissable, on rend vite la main
+    const distNow = pt ? Math.hypot(pt.x - bot.entity.position.x, pt.z - bot.entity.position.z) : 32
+    const cap = distNow < 24 ? 8000 : (i === 0 ? 20000 : 30000)
+    bot.pathfinder.thinkTimeout = Math.min(cap, Math.max(5000, remaining()))
     // détection de blocage : si la position ne change plus, on force un recalcul du chemin
     let lastPos = bot.entity.position.clone()
     let lastMove = Date.now()
@@ -369,7 +415,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
       }
     }, 2000)
     try {
-      await withTimeout(bot.pathfinder.goto(goal), Math.min(20000, Math.max(5000, remaining())))
+      await withTimeout(bot.pathfinder.goto(goal), Math.min(cap, Math.max(5000, remaining())))
       clearInterval(watch); clearInterval(stuckKiller); clearInterval(speedTracker)
       return true
     } catch (err) {
@@ -750,51 +796,107 @@ async function craftItem (bot, name, count) {
   if (have >= count) return
   const need = count - have
 
-  // cas particuliers obtenus par d'autres moyens
-  if (name === 'iron_ingot') {
-    await smeltItem(bot, 'raw_iron', 'iron_ingot', count)
+  // cas particuliers obtenus par FONT/CUISINE (toutes les recettes du four vanilla) :
+  // utilisé uniquement quand le craft de cet item est réellement demandé
+  const smeltRaw = bestSmeltRaw(bot, name)
+  if (smeltRaw) {
+    // RÉCOLTE AU FUR ET À MESURE : pas assez de matière première (ex. raw_iron pour
+    // un lingot) ? On va la MINER avant de fondre — on ne s'arrête plus sur
+    // « il manque N x raw_iron » alors que le filon est à 20 blocs.
+    const missingOut = count - countItem(bot, name)
+    const rawAvailable = countItem(bot, smeltRaw)
+    if (rawAvailable < missingOut) {
+      const ok = await ensureResource(bot, smeltRaw, missingOut)
+      if (!ok) throw new Error(`impossible de récolter ${smeltRaw} (requis : ${missingOut}, obtenu : ${countItem(bot, smeltRaw)})`)
+    }
+    await smeltItem(bot, smeltRaw, name, count)
+    // smeltItem POST-VÉRIFIE désormais ; double contrôle de la production :
+    if (countItem(bot, name) < count) throw new Error(`fonte de ${name} incomplète (${countItem(bot, name)}/${count})`)
     return
   }
-  const NOT_CRAFTABLE = new Set(['diamond', 'raw_iron', 'coal', 'charcoal', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather'])
+  const NOT_CRAFTABLE = new Set(['raw_iron', 'flint', 'ender_pearl', 'blaze_rod', 'obsidian', 'feather',
+    'oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log'])
   if (NOT_CRAFTABLE.has(name)) throw new Error(`${name} ne se craft pas : phase récolte nécessaire`)
 
   const table = await ensureCraftingTable(bot)
-  // cache des recettes par item id : recipesAll() recalcule toutes les variantes à chaque appel
-  const recipesKey = `${bot.version}:${item.id}:${!!table}`
+  // Cache des recettes STRUCTURELLES uniquement (celles de recipesAll ne dépendent
+  // PAS de l'inventaire). AVANT : le cache stockait le résultat de recipesFor(),
+  // qui est FILTRÉ par l'inventaire au moment de l'appel — une recette mémorisée
+  // alors qu'il manquait des ingrédients était ensuite rejouée telle quelle, et
+  // bot.craft() Throwait « missing ingredient ».
+  const recipesKey = `${bot.version}:${item.id}`
   let recipes = _recipesCache[recipesKey]
   if (!recipes) {
-    recipes = bot.recipesFor(item.id, null, 1, table) ?? []
-    if (!recipes.length) recipes = (bot.recipesAll(item.id, null, table) ?? []).filter((r) => (table || !r.requiresTable))
+    recipes = (bot.recipesAll(item.id, null, true) ?? []).filter((r) => !r.requiresTable || !!table)
     _recipesCache[recipesKey] = recipes
   }
   if (!recipes.length) throw new Error(`pas de recette pour ${name}`)
-  // un seul parcours d'inventaire pour toutes les vérifications d'ingrédients
-  const invCount = new Map()
-  for (const i of bot.inventory.items()) invCount.set(i.name, (invCount.get(i.name) ?? 0) + i.count)
+  // inventaire LU FRAIS À CHAQUE PASSE : un instantané pris avant la boucle donnait
+  // des comptes périmés après la fabrication récursive d'un ingrédient (double craft
+  // ou faux « irrécupérables »). const snapshot = O(n) court, négligeable ici.
+  let invCount = new Map()
+  const refreshInv = () => {
+    invCount = new Map()
+    for (const i of bot.inventory.items()) invCount.set(i.name, (invCount.get(i.name) ?? 0) + i.count)
+  }
+  refreshInv()
   const countOf = (n) => invCount.get(n) ?? 0
   // item par id : itemsById (clé id) prioritaire, fallback md.items[id] (objet keyed-by-id
   // sur les versions récentes ; array sur d'anciennes versions de minecraft-data)
   const itemById = (id) => md.itemsById?.[id] ?? (Array.isArray(md.items) ? md.items.find((i) => i.id === id) : md.items[id])
-  // préférer une recette craftable immédiatement (gère les variantes de planches)
-  const craftable = recipes.find((r) => (r.ingredients ?? []).every((ing) => {
+  // recette immédiatement craftable (gère les variantes : cobblestone vs blackstone,
+  // chaque type de planches…). Sinon on prend la première et on fabrique les manquants.
+  const isCraftableNow = (r) => (r.ingredients ?? []).every((ing) => {
     const it = itemById(ing.id)
     return it && countOf(it.name) >= (ing.count ?? 1)
-  }))
-  const recipe = craftable ?? recipes[0]
-  const resultCount = recipe.result?.count ?? 1
-  const crafts = Math.ceil(need / resultCount)
-
-  for (const ing of recipe.ingredients ?? []) {
-    const ingItem = itemById(ing.id)
-    if (!ingItem) continue
-    const ingNeed = (ing.count ?? 1) * crafts
-    if (countOf(ingItem.name) < ingNeed) await craftItem(bot, ingItem.name, ingNeed)
+  })
+  let recipe = recipes.find(isCraftableNow) ?? recipes[0]
+  // fabriquer (récursivement) les ingrédients manquants de la recette choisie
+  for (let pass = 0; pass < 3; pass++) {
+    refreshInv() // comptes à jour (la passe précédente a pu fabriquer des ingrédients)
+    let missing = false
+    const resultCount = recipe.result?.count ?? 1
+    const crafts = Math.ceil(need / resultCount)
+    for (const ing of recipe.ingredients ?? []) {
+      const ingItem = itemById(ing.id)
+      if (!ingItem) continue
+      const ingNeed = (ing.count ?? 1) * crafts
+      if (countOf(ingItem.name) < ingNeed) {
+        missing = true
+        // ingrédient MINABLE (raw_iron, diamant, silex…) → récolte ciblée d'abord ;
+        // sinon fabrication récursive (planches, bâtons…)
+        if (GATHER_RULES[ingItem.name]) {
+          const ok = await ensureResource(bot, ingItem.name, ingNeed)
+          if (!ok) throw new Error(`récolte de ${ingItem.name} insuffisante (${countOf(ingItem.name)}/${ingNeed})`)
+        } else {
+          await craftItem(bot, ingItem.name, ingNeed) // fabrique l'ingrédient (récursion)
+        }
+      }
+    }
+    if (missing) {
+      // l'inventaire a changé : RE-choisir une recette maintenant craftable
+      // (ex. la récursion a produit des planches de bouleau → prendre la variante bouleau)
+      recipe = recipes.find(isCraftableNow) ?? recipe
+      continue
+    }
+    const freshTable = await ensureCraftingTable(bot)
+    try {
+      await bot.craft(recipe, crafts, freshTable)
+      chat(bot, 'crafting', { count: crafts, item: name })
+      log('✓ crafté ' + crafts + '× ' + name)
+      return
+    } catch (e) {
+      // erreur mineflayer « missing ingredient » opaque → diagnostiquer précisément
+      const resultCount2 = recipe.result?.count ?? 1
+      const crafts2 = Math.ceil(need / resultCount2)
+      const lacks = (recipe.ingredients ?? [])
+        .map((ing) => ({ n: itemById(ing.id)?.name ?? ('id ' + ing.id), need: (ing.count ?? 1) * crafts2, have: countOf(itemById(ing.id)?.name ?? '') }))
+        .filter((i) => i.have < i.need)
+      if (lacks.length) throw new Error(`craft ${name} impossible : il manque ${lacks.map((l) => (l.need - l.have) + 'x ' + l.n).join(', ')}`)
+      throw e
+    }
   }
-
-  const freshTable = await ensureCraftingTable(bot)
-  await bot.craft(recipe, crafts, freshTable)
-  chat(bot, 'crafting', { count: crafts, item: name })
-  log('✓ crafté ' + crafts + '× ' + name)
+  throw new Error(`craft ${name} : ingrédients irrécupérables après 3 passes`)
 }
 
 // Fabrique des planches à partir de n'importe quels logs en inventaire
@@ -822,6 +924,49 @@ async function craftAnyPlanks (bot, count) {
 
 // ---------- Fonte ----------
 
+// Recettes du FOUR (vanilla 26.1) : sortie -> matières premières possibles.
+// Absentes de minecraft-data : table maintenue ici. Plusieurs entrées possibles
+// (ex. verre = sable OU sable rouge) : celle la plus présente en inventaire est choisie.
+const SMELT_MAP = {
+  iron_ingot: ['raw_iron'],
+  gold_ingot: ['raw_gold'],
+  copper_ingot: ['raw_copper'],
+  netherite_scrap: ['ancient_debris'],
+  glass: ['sand', 'red_sand'],
+  charcoal: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log'],
+  stone: ['cobblestone'],
+  smooth_stone: ['stone'],
+  deepslate: ['cobbled_deepslate'],
+  terracotta: ['clay_ball'],
+  cooked_beef: ['beef'],
+  cooked_porkchop: ['porkchop'],
+  cooked_chicken: ['chicken'],
+  cooked_mutton: ['mutton'],
+  cooked_rabbit: ['rabbit'],
+  cooked_cod: ['raw_cod'],
+  cooked_salmon: ['raw_salmon'],
+  baked_potato: ['potato'],
+  dried_kelp: ['kelp'],
+  popped_chorus_fruit: ['chorus_fruit'],
+  cracked_stone_bricks: ['stone_bricks'],
+  cracked_nether_bricks: ['nether_bricks'],
+  cracked_deepslate_bricks: ['deepslate_bricks'],
+  cracked_deepslate_tiles: ['deepslate_tiles']
+}
+
+// Choisit la matière première de fonte la plus disponible (fallback : la première)
+function bestSmeltRaw (bot, name) {
+  const raws = SMELT_MAP[name]
+  if (!raws?.length) return null
+  let best = raws[0]
+  let bestCount = -1
+  for (const r of raws) {
+    const c = countItem(bot, r)
+    if (c > bestCount) { bestCount = c; best = r }
+  }
+  return best
+}
+
 async function smeltItem (bot, rawName, outName, count) {
   const md = mcData(bot)
   const furnaceBlock = await ensureFurnace(bot)
@@ -829,8 +974,15 @@ async function smeltItem (bot, rawName, outName, count) {
   while (countItem(bot, outName) < count && safety++ < 40) {
     const raw = bot.inventory.items().find((i) => i.name === rawName)
     if (!raw) break
-    const fuel = bot.inventory.items().find((i) =>
+    let fuel = bot.inventory.items().find((i) =>
       FUEL_NAMES.has(i.name))
+    if (!fuel) {
+      // récolte au fur et à mesure : le combustible manque mais le charbon est minable —
+      // on va en chercher un peu au lieu d'abandonner la fonte
+      log('🔥 plus de combustible — je vais chercher du charbon pour finir la fonte')
+      try { await ensureResource(bot, 'coal', Math.max(1, Math.ceil((count - countItem(bot, outName)) / 8))) } catch {}
+      fuel = bot.inventory.items().find((i) => FUEL_NAMES.has(i.name))
+    }
     if (!fuel) { log('plus de combustible'); break }
     chat(bot, 'smelting', { out: outName })
     const furnace = await bot.openFurnace(furnaceBlock)
@@ -850,6 +1002,13 @@ async function smeltItem (bot, rawName, outName, count) {
     await sleep(500)
   }
   if (countItem(bot, outName) < count) throw new Error(`fonte incomplète : ${outName} (${countItem(bot, outName)}/${count})`)
+
+  // POST-VÉRIFICATION (bug « missing ingredient » du 22:25) : avant, une fonte
+  // sans matière première (ou sans four) REVENAIT SANS RIEN PRODUIRE, et le craft
+  // appelant échouait plus loin avec l'opaque 'missing ingredient' de mineflayer.
+  if (countItem(bot, outName) < count) {
+    throw new Error(`fonte incomplète : ${outName} ${countItem(bot, outName)}/${count} — il manque ${(count - countItem(bot, outName))}x ${rawName} à cuire (four/combustible ?)`)
+  }
 }
 
 // ---------- Nourriture ----------
@@ -864,8 +1023,28 @@ const FUEL_NAMES = new Set(['coal', 'charcoal', 'oak_planks', 'spruce_planks', '
 
 async function eatUntil (bot, target = 18) {
   let safety = 0
+  // RÉFLEXE CUISINE : si la seule nourriture est CRUE mais qu'on peut cuire
+  // (four possible + combustible), on cuit d'abord — poulet cru = poison, et
+  // la viande cuite restaure plus. Une seule fois par appel pour ne pas boucler.
+  try {
+    const hasCooked = FOOD_NAMES.some((f) => f.startsWith('cooked_') || ['golden_apple', 'bread', 'apple'].includes(f)) && countItem(bot, 'cooked_beef') + countItem(bot, 'cooked_porkchop') + countItem(bot, 'cooked_chicken') + countItem(bot, 'cooked_mutton') + countItem(bot, 'bread') + countItem(bot, 'golden_apple') > 0
+    const hasFuel = [...FUEL_NAMES].some((f) => countItem(bot, f) > 0)
+    const rawFood = ['beef', 'porkchop', 'chicken', 'mutton'].reduce((a, f) => a + countItem(bot, f), 0)
+    if (!hasCooked && rawFood > 0 && hasFuel && bot.food < target) {
+      const rawName = ['beef', 'porkchop', 'chicken', 'mutton'].find((f) => countItem(bot, f) > 0)
+      const cookedName = { beef: 'cooked_beef', porkchop: 'cooked_porkchop', chicken: 'cooked_chicken', mutton: 'cooked_mutton' }[rawName]
+      log('🍳 Réflexe cuisine : je cuis ' + Math.min(4, rawFood) + 'x ' + rawName + ' avant de manger cru')
+      await smeltItem(bot, rawName, cookedName, Math.min(4, rawFood))
+    }
+  } catch {}
   while (bot.food < target && safety++ < 10) {
-    const food = bot.inventory.items().find((i) => FOOD_NAMES_SET.has(i.name))
+    // manger par PRIORITÉ (cuite avant crue, dorée/pain avant viande crue) :
+    // avant, c'était le premier item de l'inventaire → poulet cru et risque de poison
+    let food = null
+    for (const fname of FOOD_NAMES) {
+      const it = bot.inventory.items().find((i) => i.name === fname)
+      if (it && countItem(bot, fname) > 0) { food = it; break }
+    }
     if (!food) return false
     await bot.equip(food, 'hand')
     await sleep(150)
@@ -879,7 +1058,7 @@ async function eatUntil (bot, target = 18) {
 
 // ---------- Combat ----------
 
-const SWORD_PRIORITY = ['diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword']
+const SWORD_PRIORITY = ['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword', 'netherite_axe', 'diamond_axe', 'iron_axe']
 async function equipBestSword (bot) {
   // un seul items() puis find par priorité (évite 4× countItem = 4 parcours d'inventaire)
   const items = bot.inventory.items()
@@ -1024,6 +1203,26 @@ async function placeBlockFromInventory (bot, name) {
       } catch (e) {}
     }
   }
+  // passe 3 (universelle, façon joueur bloqué) : sauter et poser le bloc sous ses pieds.
+  // Fonctionne partout où il y a du sol — même au fond d'une cave luxuriante
+  // obstruée de lianes qui font échouer la ligne de vue.
+  try {
+    const feet = bot.entity.position.floored()
+    const beneath = bot.blockAt(feet.offset(0, -1, 0))
+    if (isSolidBlock(beneath)) {
+      await equipName(bot, name, 'hand')
+      bot.setControlState('jump', true)
+      try {
+        await sleep(250)
+        await bot.placeBlock(beneath, new Vec3(0, 1, 0))
+      } finally {
+        bot.setControlState('jump', false)
+      }
+      await sleep(150)
+      const placed = bot.blockAt(feet)
+      if (placed && placed.name === name) return placed
+    }
+  } catch (e) {}
   throw new Error(`aucun emplacement pour poser ${name}`)
 }
 
@@ -1117,11 +1316,23 @@ async function branchMine (bot, { y, need, ores = [], extraOres = [], maxMinutes
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
   while (!need() && Date.now() - t0 < maxMinutes * 60000) {
     // ramasser les minerais visibles (rayon réduit : le scan complet est coûteux)
-    const spots = bot.findBlocks({ matching: oreIds, maxDistance: 48, count: 24 })
+    let spots = bot.findBlocks({ matching: oreIds, maxDistance: 48, count: 24 })
     // mémoriser les minerais vus pour y retourner directement
     for (const pos of spots.slice(0, 6)) {
       const b = bot.blockAt(pos)
       if (b && b.name.includes('ore')) learn.recordDiscovery(b.name, pos)
+    }
+    // cerveau : rien de visible -> interroger la MÉMOIRE des gisements déjà vus
+    // (runs précédents, miners repérés en creusant) avant de creuser à l'aveugle
+    if (!spots.length) {
+      const remembered = ores
+        .flatMap((n) => learn.getNearestDiscoveries(n, bot.entity.position, 2, 128))
+        .sort((a, b) => a.dist - b.dist)
+      if (remembered.length) {
+        log('🧠 mémoire : gisement ' + ores.join('/') + ' repéré à ' + Math.round(remembered[0].dist) + ' blocs — j\'y retourne')
+        await goTo(bot, new GoalNear(remembered[0].x, remembered[0].y, remembered[0].z, 3), { timeout: 90000, retries: 0 }).catch(() => {})
+        spots = bot.findBlocks({ matching: oreIds, maxDistance: 32, count: 24 })
+      }
     }
     let collected = false
     for (const pos of spots.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))) {
@@ -1285,7 +1496,8 @@ async function sortInventory (bot) {
 
 // Jette les items inutiles (dirt, gravel, rotten_flesh si pas affamé, etc.)
 async function dropJunk (bot, keep = ['dirt', 'cobblestone', 'stone']) {
-  const junkNames = ['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'bone', 'string']
+  // string retiré : indispensable pour l'arc (cristaux/dragon) — ce n'est pas un junk
+  const junkNames = ['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'bone']
   let dropped = 0
   for (const item of bot.inventory.items()) {
     if (junkNames.includes(item.name) && bot.food > 10) {
@@ -1293,6 +1505,87 @@ async function dropJunk (bot, keep = ['dirt', 'cobblestone', 'stone']) {
     }
   }
   return dropped
+}
+
+// ---------- Récolte ciblée intégrée au craft ----------
+// « Valider au fur et à mesure » : quand un ingrédient MINABLE manque, le bot
+// ne s'arrête plus sur « il manque 3x raw_iron » — il va le miner, le fondre,
+// puis continue la chaîne. Limité aux ressources de minage/récolte sûres et
+// rapides (les drops de mobs/structures restent gérés par les phases).
+const GATHER_RULES = {
+  raw_iron: { y: 16, ores: ['iron_ore', 'deepslate_iron_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 10 },
+  raw_gold: { y: 16, ores: ['gold_ore', 'deepslate_gold_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 10 },
+  raw_copper: { y: 48, ores: ['copper_ore', 'deepslate_copper_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 8 },
+  diamond: { y: -58, ores: ['diamond_ore', 'deepslate_diamond_ore'], extra: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'], maxMinutes: 15 },
+  coal: { y: 32, ores: ['coal_ore', 'deepslate_coal_ore'], extra: [], maxMinutes: 8 },
+  flint: { gravel: true },
+  obsidian: { obsidian: true },
+  cobblestone: { stone: ['stone', 'cobblestone'] },
+  stone: { stone: ['stone', 'cobblestone'] },
+  netherrack: { stone: ['netherrack'] }, // ponts du Nether
+  end_stone: { stone: ['end_stone'] }, // ponts de l'End
+  cobbled_deepslate: { stone: ['cobbled_deepslate'] },
+  // bûches : la base des planches/bâtons/charbon — collecte rapide par arbres proches
+  oak_log: { wood: true }, birch_log: { wood: true }, spruce_log: { wood: true },
+  jungle_log: { wood: true }, acacia_log: { wood: true }, dark_oak_log: { wood: true },
+  cherry_log: { wood: true }, mangrove_log: { wood: true }, pale_oak_log: { wood: true }
+}
+
+// Amène l'inventaire à `count` de `name` via la récolte adaptée ; true si atteint.
+async function ensureResource (bot, name, count) {
+  const have = () => countItem(bot, name)
+  if (have() >= count) return true
+  const rule = GATHER_RULES[name]
+  if (!rule) return false
+  log('⛏️ il manque du ' + name + ' pour ce craft — je vais en chercher (' + (count - have()) + ')')
+  if (rule.gravel) {
+    await digGravelForFlint(bot, count)
+  } else if (rule.obsidian) {
+    await makeObsidian(bot, count)
+  } else if (rule.stone) {
+    await collectBlocks(bot, rule.stone, count, { maxDistance: 64, maxMinutes: 4 })
+  } else if (rule.wood) {
+    const LOGS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log']
+    // mémoriser les arbres ramassés au passage (recordDiscovery déjà fait dans collectBlocks)
+    await collectBlocks(bot, LOGS, count, { maxDistance: 64, maxMinutes: 3 })
+    // pas de bûche obtenue ? tentative de transformation des planches restantes (idempotent)
+  } else {
+    // descente seulement si on est bien au-dessus du filon (sinon on mine sur place)
+    if (rule.y < bot.entity.position.y - 8 && bot.game?.dimension === 'overworld') {
+      await digStaircase(bot, rule.y)
+    }
+    await branchMine(bot, {
+      y: rule.y,
+      need: () => have() >= count,
+      ores: rule.ores,
+      extraOres: rule.extra,
+      maxMinutes: rule.maxMinutes
+    })
+  }
+  return have() >= count
+}
+
+// ---------- Ponts & précautions vide/lave ----------
+// Blocs utilisables pour bâtir un pont (le pathfinder en pose en marchant)
+const BRIDGE_BLOCKS = ['cobblestone', 'stone', 'cobbled_deepslate', 'dirt', 'netherrack', 'end_stone',
+  'oak_planks', 'spruce_planks', 'birch_planks', 'dark_oak_planks', 'jungle_planks', 'acacia_planks']
+
+function countBridgeBlocks (bot) {
+  return BRIDGE_BLOCKS.reduce((a, n) => a + countItem(bot, n), 0)
+}
+
+// PRÉCAUTION : garantir une réserve de blocs avant de traverser une zone
+// vide/lave (forteresse du Nether, lacunes de l'End, grottes profondes).
+// Dans le Nether on pille du netherrack, dans l'End de la pierre de l'End —
+// récoltés SUR PLACE (le cobblestone est introuvable hors overworld).
+async function ensureBridgeBlocks (bot, min = 32) {
+  if (countBridgeBlocks(bot) >= min) return true
+  const dim = bot.game?.dimension ?? 'overworld'
+  const localName = dim === 'the_nether' ? 'netherrack' : (dim === 'the_end' ? 'end_stone' : 'cobblestone')
+  say(bot, '🧱 Précaution pont : seulement ' + countBridgeBlocks(bot) + ' blocs de construction — je prends du ' + localName + ' avant de traverser')
+  const ok = await ensureResource(bot, localName, Math.max(min - countBridgeBlocks(bot), 8))
+  say(bot, ok ? '🧱 ' + countBridgeBlocks(bot) + ' blocs de pont en réserve' : '⚠️ réserve de blocs insuffisante — prudence sur les ponts')
+  return ok
 }
 
 // Wrappers sûrs : sur un serveur qui lag (ou 26.1 avec PartialReadError), les
@@ -1309,7 +1602,7 @@ module.exports = {
   Vec3, log, sleep, say, chat, proactive, announce, isItemDrop, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, watchBlockChanges, sortInventory, dropJunk, legit, rand, randInt, withTimeout, mcData, blockId, countItem, hasAnyItem, findEntities, equipName, digBlock,
   setMovements, goTo, walkDirect, GoalNear, GoalXZ, GoalY, GoalBlock, GoalFollow, explore, enterDimension,
   collectBlocks, collectNearbyItems, lootNearbyChests, lootSingleChest, isChestLooted,
-  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem,
+  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw, GATHER_RULES, ensureResource, countBridgeBlocks, ensureBridgeBlocks,
   eatUntil, FOOD_NAMES,
   equipBestSword, equipShield, huntMob, shootWithBow,
   placeBlockFromInventory, findSolidNeighbor, pillarUp,

@@ -95,6 +95,9 @@ function startAutoFarm (bot, intervalMs = 60000) {
       if (h > 0) log('🌾 Farm récolté : ' + h + ' cultures')
     } catch (e) {}
   }, intervalMs)
+  // attacher AUSSI au bot : index.js nettoie bot._farmTimer à la déconnexion —
+  // avant, le timer restait en variable module et « tournait » sur un bot mort
+  try { bot._farmTimer = _farmTimer } catch {}
   log('🌾 Auto-farm actif (récolte toutes les ' + intervalMs / 1000 + 's)')
   return _farmTimer
 }

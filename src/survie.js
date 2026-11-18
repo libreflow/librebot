@@ -6,7 +6,7 @@
 const {
   Vec3, log, say, chat, sleep, goTo, GoalNear, GoalXZ,
   countItem, hasAnyItem, eatUntil, equipShield, equipBestSword, shootWithBow, withTimeout, huntMob,
-  placeBlockFromInventory, mcData, lootSingleChest, isChestLooted
+  placeBlockFromInventory, mcData, lootSingleChest, isChestLooted, dropJunk, sortInventory
 } = require('./utils')
 // loadProgress d'advancements (caché en mémoire) plutôt que celui de mission.js
 // qui fait un readFileSync à chaque appel — ici appelé à chaque fuite
@@ -121,8 +121,8 @@ function countHostiles (bot, maxDist) {
 }
 
 // un seul parcours d'inventaire (l'ancien faisait jusqu'à 11 countItem = 11 parcours)
-const MELEE_WEAPONS = new Set(['diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
-  'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'mace', 'trident'])
+const MELEE_WEAPONS = new Set(['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
+  'netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe', 'mace', 'trident'])
 function hasWeapon (bot) {
   let bow = 0, arrow = 0
   for (const i of bot.inventory.items()) {
@@ -135,7 +135,7 @@ function hasWeapon (bot) {
 
 // Suffisamment équipé pour se battre au lieu de fuir :
 // bonne arme de mêlée + au moins 2 pièces d'armure + de quoi manger.
-const GOOD_WEAPONS = new Set(['diamond_sword', 'iron_sword', 'mace', 'diamond_axe', 'iron_axe', 'trident'])
+const GOOD_WEAPONS = new Set(['netherite_sword', 'diamond_sword', 'iron_sword', 'mace', 'netherite_axe', 'diamond_axe', 'iron_axe', 'trident'])
 function isWellEquipped (bot) {
   let weapon = false
   let armor = 0
@@ -165,6 +165,16 @@ async function fleeFrom (bot, threatPos, threatName = null) {
     if (dir.lengthSq() > 0.001) {
       dir.normalize()
       let away = bot.entity.position.plus(dir.scale(40))
+      // cerveau : si la direction de fuite frôle une zone de mort connue, dévier
+      const danger = learn.nearestDangerSpatial({ x: away.x, z: away.z }, 48)
+      if (danger && Math.hypot(danger.x - away.x, danger.z - away.z) < 32) {
+        const dd = new Vec3(away.x - danger.x, 0, away.z - danger.z)
+        if (dd.lengthSq() > 0.001) {
+          dd.normalize()
+          away = away.plus(dd.scale(30))
+          log('🧠 fuite déviée : zone de mort connue évitée à ' + danger.dist + ' blocs')
+        }
+      }
       if (threatName && RANGED_MOBS.has(threatName)) {
         const perp = new Vec3(-dir.z, 0, dir.x)
         away = away.plus(perp.scale(Math.random() < 0.5 ? 14 : -14))
@@ -197,8 +207,11 @@ async function reactDamage (bot) {
     try { await withTimeout(eatUntil(bot, 20), 4000) } catch {}
   }
   // 2. Hostile proche + vie basse (<= 16) : FUITE immédiate (passe le mutex, urgence)
-  //    mais PAS si le bot est bien équipé (bonne arme + armure) : il se bat (le watchdog prend le relais)
-  if (hostile && hp <= 16 && (hp <= 8 || !isWellEquipped(bot))) {
+  //    mais PAS si le bot est bien équipé (bonne arme + armure) : il se bat (le watchdog prend le relais).
+  //    Le seuil vital est APPRIS (getFleeThreshold : 8 par défaut, monte à 14 selon
+  //    les morts passées en combat) — le bot qui meurt souvent apprend à fuir plus tôt
+  const fleeThreshold = Math.max(8, learn.getFleeThreshold())
+  if (hostile && hp <= 16 && (hp <= fleeThreshold || !isWellEquipped(bot))) {
     const d = Math.round(hostile.position.distanceTo(bot.entity.position))
     logThrottle('dmgflee', '😨 ' + hostile.name + ' à ' + d + 'm, vie ' + Math.round(hp) + '/20 — fuite immédiate !', 3000)
     bot._fleeing = true
@@ -239,6 +252,17 @@ function startSurvivalWatch (bot) {
 
       // 1. armure : rééquiper le meilleur set de temps en temps
       if (Math.random() < 0.01) { try { bot.armorManager?.equipAll?.() } catch {}; try { bot.autototem?.equip?.() } catch {} }
+      // cerveau : inventaire encombré → jeter le superflu (viande pourrie, os, ficelle…)
+      if (bot.inventory.items().length >= 34 && Math.random() < 0.05) {
+        try { const dropped = await dropJunk(bot); if (dropped > 0) log('🧠 inventaire : ' + dropped + ' items de superflu jetés') } catch {}
+      }
+      // tri de la hotbar (outils d'abord) de temps en temps
+      if (Math.random() < 0.003) { try { await sortInventory(bot) } catch {} }
+      // cerveau : purger les points spatiaux obsolètes (minés, > 2 h) une fois par heure
+      if (!bot._pruneAt || Date.now() - bot._pruneAt > 3600000) {
+        bot._pruneAt = Date.now()
+        try { learn.pruneSpatial() } catch {}
+      }
 
       // 2. bouclier en off-hand dès qu'on en a un
       if (countItem(bot, 'shield') > 0) {

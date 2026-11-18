@@ -378,4 +378,4 @@ function announce (bot, lines) {
   }
 }
 
-module.exports = { chat, say, log, logThrottle, proactive, announce, pick, MESSAGES, ALWAYS_CHAT, getLastLogAt: () => lastLogAt }
+module.exports = { chat, say, log, logThrottle, proactive, announce, pick, MESSAGES, ALWAYS_CHAT, safeChat, getLastLogAt: () => lastLogAt }

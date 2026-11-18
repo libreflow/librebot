@@ -1,5 +1,13 @@
 // Corrections finales : mémoire des gisements consultée, confirmation stronghold itérative, purge spatiale
 const fs = require('fs')
+if (fs.existsSync('learning.json.bak')) fs.unlinkSync('learning.json.bak')
+if (fs.existsSync('learning.json')) fs.renameSync('learning.json', 'learning.json.bak')
+fs.writeFileSync('learning.json', '{}')
+process.on('exit', () => { try { fs.unlinkSync('learning.json'); if (fs.existsSync('learning.json.bak')) fs.renameSync('learning.json.bak', 'learning.json') } catch {} })
+if (fs.existsSync('worldmap.json.bak')) fs.unlinkSync('worldmap.json.bak')
+if (fs.existsSync('worldmap.json')) fs.renameSync('worldmap.json', 'worldmap.json.bak')
+fs.writeFileSync('worldmap.json', '{}')
+process.on('exit', () => { try { fs.unlinkSync('worldmap.json'); if (fs.existsSync('worldmap.json.bak')) fs.renameSync('worldmap.json.bak', 'worldmap.json') } catch {} })
 if (!fs.existsSync('./learning.json')) fs.writeFileSync('./learning.json', '{}')
 if (!fs.existsSync('./worldmap.json')) fs.writeFileSync('./worldmap.json', '{}')
 const md = require('minecraft-data')('26.1')

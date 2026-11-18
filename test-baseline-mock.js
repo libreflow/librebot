@@ -1,5 +1,9 @@
 // Mock harness: simule des runs rush avec horloge factice, vérifie la baseline agrégée
 const fs = require('fs')
+if (fs.existsSync('learning.json.bak')) fs.unlinkSync('learning.json.bak')
+if (fs.existsSync('learning.json')) fs.renameSync('learning.json', 'learning.json.bak')
+fs.writeFileSync('learning.json', '{}')
+process.on('exit', () => { try { fs.unlinkSync('learning.json'); if (fs.existsSync('learning.json.bak')) fs.renameSync('learning.json.bak', 'learning.json') } catch {} })
 const LEARN_PATH = require('path').join(__dirname, 'learning.json')
 if (!fs.existsSync(LEARN_PATH)) fs.writeFileSync(LEARN_PATH, '{}')
 // horloge factice : Date.now contrôlée (speedrun/learn utilisent Date.now)

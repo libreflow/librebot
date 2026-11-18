@@ -673,7 +673,7 @@ async function handleCommand (bot, cfg, from, message) {
     // garder le reste de la progression (coordonnées, morts…) — même bug que fromStart avant
     saveProgress({ ...loadProgress(), done: [] })
     say(bot, '🔄 Progression remise à zéro.')
-  } else if (/(mission|dragon|go)/.test(msg)) {
+  } else if (/\b(mission|dragon|go)\b/.test(msg)) {
     if (!state.running) runMission(bot, cfg).catch((e) => log(e.stack))
   } else if (/mémoire|memoire|apprentissage|learn|skills/.test(msg)) {
     say(bot, `🧠 Mémoire : ${learn.summary()}`)
@@ -715,9 +715,12 @@ async function handleCommand (bot, cfg, from, message) {
     const p = bot.entity.position.floored()
     chat(bot, 'coords', { x: p.x, y: p.y, z: p.z, dim: bot.game?.dimension ?? '?' }, { force: true })
     say(bot, '📍 (' + p.x + ', ' + p.y + ', ' + p.z + ') — dimension ' + (bot.game?.dimension ?? '?'))
-  } else if (/(manger|eat)/.test(msg)) {
+  } else if (/\b(manger|eat)\b/.test(msg)) {
     await eatUntil(bot, 20)
     say(bot, `🍗 Faim ${Math.round(bot.food)}/20`)
+  } else {
+    // aucune commande reconnue - conversation libre avec le joueur
+    require('./conversation').reply(bot, from, message)
   }
 }
 

@@ -353,7 +353,10 @@ function createBot () {
     // pour toujours et l'auto-mission croyait que ça tournait : le bot reprenait
     // « son objectif » gelé sans jamais se réadapter. On force l'état à l'arrêt :
     // le respawn relancera runMission, qui réévalue le rattrapage inventaire.
-    if (state.running) {
+        // Sauvegarde du run speedrun en cours : une déconnexion ne doit pas perdre les splits
+    // déjà réalisés (le run est clos comme « interrompu » — donnée réelle pour la baseline).
+    try { const sr = require('./speedrun'); if (sr.isRunning()) sr.finish(false, require('./chat').log) } catch {}
+if (state.running) {
       state.running = false
       state.autoResumeAt = null
       log('🔄 Mission interrompue par la déconnexion — elle sera relancée au reconnect (avec rattrapage inventaire)')

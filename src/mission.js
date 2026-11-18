@@ -654,6 +654,13 @@ async function handleCommand (bot, cfg, from, message) {
     else for (const row of b.phases) {
       say(bot, `📉 ${row.phase} : ${speedrun.fmt(row.avgDelta)} en moyenne (${speedrun.fmt(row.minDelta)}–${speedrun.fmt(row.maxDelta)}, n=${row.n}) — ${row.deaths} mort(s)`)
     }
+  } else if (/finrun|fin du run|endrun|cl[oô]ture/.test(msg)) {
+    // clôturer manuellement le run en cours : les splits réalisés alimentent la baseline
+    if (speedrun.isRunning()) {
+      const res = speedrun.finish(false, log)
+      const parts = Object.entries(res.phaseDeltas ?? {}).map(([k, ms]) => k + '=' + speedrun.fmt(ms))
+      say(bot, '⏹️ Run clôturé (⏱️ ' + speedrun.fmt(res.totalMs) + ') — splits enregistrés pour la baseline : ' + (parts.join(' ') || 'aucune phase terminée'))
+    } else say(bot, '⏹️ Aucun run en cours.')
   } else if (/chrono|speedrun|split|\btemps\b/.test(msg)) {
     const desc = speedrun.describe()
     say(bot, '⏱️ ' + desc)

@@ -133,6 +133,19 @@ function hasWeapon (bot) {
   return bow > 0 && arrow > 0
 }
 
+// Suffisamment équipé pour se battre au lieu de fuir :
+// bonne arme de mêlée + au moins 2 pièces d'armure + de quoi manger.
+const GOOD_WEAPONS = new Set(['diamond_sword', 'iron_sword', 'mace', 'diamond_axe', 'iron_axe', 'trident'])
+function isWellEquipped (bot) {
+  let weapon = false
+  let armor = 0
+  for (const i of bot.inventory.items()) {
+    if (GOOD_WEAPONS.has(i.name)) weapon = true
+    else if (i.name.endsWith('_helmet') || i.name.endsWith('_chestplate') || i.name.endsWith('_leggings') || i.name.endsWith('_boots')) armor++
+  }
+  return weapon && armor >= 2 && (bot.food ?? 20) >= 12
+}
+
 function isNight (bot) {
   const t = bot.time?.timeOfDay ?? 0
   return t >= 13000 && t <= 23000
@@ -184,7 +197,8 @@ async function reactDamage (bot) {
     try { await withTimeout(eatUntil(bot, 20), 4000) } catch {}
   }
   // 2. Hostile proche + vie basse (<= 16) : FUITE immédiate (passe le mutex, urgence)
-  if (hostile && hp <= 16) {
+  //    mais PAS si le bot est bien équipé (bonne arme + armure) : il se bat (le watchdog prend le relais)
+  if (hostile && hp <= 16 && (hp <= 8 || !isWellEquipped(bot))) {
     const d = Math.round(hostile.position.distanceTo(bot.entity.position))
     logThrottle('dmgflee', '😨 ' + hostile.name + ' à ' + d + 'm, vie ' + Math.round(hp) + '/20 — fuite immédiate !', 3000)
     bot._fleeing = true
@@ -198,7 +212,7 @@ async function reactDamage (bot) {
         if (!bot.entity?.position || bot.health >= 17) { clearInterval(_panicTimer); _panicTimer = null; return }
         if (bot.food >= 8) await withTimeout(eatUntil(bot, 20), 2500).catch(() => {})
         const h = nearestHostile(bot, 12)
-        if (h && bot.health <= 14) {
+        if (h && (bot.health <= 8 || (bot.health <= 14 && !isWellEquipped(bot)))) {
           bot._fleeing = true
           setTimeout(() => { bot._fleeing = false }, 4000)
         }
@@ -318,7 +332,7 @@ function startSurvivalWatch (bot) {
 
       // Évaluer la situation avec le cerveau de décision
       const dec = decision.evaluate(bot, {
-        hostile, hostileDist, hostilesNear, armed, hasBow,
+        hostile, hostileDist, hostilesNear, armed, hasBow, wellEquipped: isWellEquipped(bot),
         hasFood: countItem(bot, 'cooked_beef') > 0 || bot.food > 10,
         missionActive: true,
         opportunity, opportunityValue
@@ -443,4 +457,4 @@ function startSurvivalWatch (bot) {
   return bot._survivalTimer
 }
 
-module.exports = { startSurvivalWatch, nearestHostile, countHostiles, fightSmart, reactDamage, stopPanic, HOSTILES, isNight }
+module.exports = { startSurvivalWatch, nearestHostile, countHostiles, fightSmart, reactDamage, stopPanic, HOSTILES, isNight, isWellEquipped }

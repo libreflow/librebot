@@ -83,8 +83,14 @@ async function phaseWood (bot, cfg, progress) {
 async function phaseStone (bot, cfg, progress) {
   say(bot, '🪨 Phase 2 : outils en pierre')
   const rush = !!cfg.rush
-  // rush : 12 cobble suffisent (pioche 3 + fourneau 8 + marge)
-  await collectBlocks(bot, ['stone', 'cobblestone'], rush ? 12 : 64, { maxDistance: 96, maxMinutes: rush ? 3 : 8 })
+  // adaptatif : ne pas re-miner la pierre déjà en stock
+  const haveStone = countItem(bot, 'cobblestone') + countItem(bot, 'stone')
+  if (haveStone < (rush ? 12 : 64)) {
+    // rush : 12 cobble suffisent (pioche 3 + fourneau 8 + marge)
+    await collectBlocks(bot, ['stone', 'cobblestone'], rush ? 12 : 64, { maxDistance: 96, maxMinutes: rush ? 3 : 8 })
+  } else {
+    say(bot, '⚡ ' + haveStone + ' blocs de pierre déjà en stock — je passe le minage')
+  }
   await craftItem(bot, 'stone_pickaxe', 1)
   if (!rush) {
     await craftItem(bot, 'stone_axe', 1)
@@ -100,16 +106,23 @@ async function phaseStone (bot, cfg, progress) {
 async function phaseIron (bot, cfg, progress) {
   say(bot, '⛏️ Phase 3 : le fer (descente vers Y=16)')
   const rush = !!cfg.rush
+  // adaptatif : le besoin compte AUSSI les lingots déjà fondus (butin de coffre,
+  // reprise de run) — sinon on re-minait du fer alors qu'on en a déjà
+  const ironTotal = () => countItem(bot, 'raw_iron') + countItem(bot, 'iron_ingot')
   await getWaterBucket(bot) // seau d'eau gardé pour l'obsidienne
   await digStaircase(bot, 16)
-  const ok = await branchMine(bot, {
-    y: 16,
-    need: () => countItem(bot, 'raw_iron') >= cfg.targets.rawIron,
-    ores: ['iron_ore', 'deepslate_iron_ore'],
-    extraOres: ['coal_ore', 'deepslate_coal_ore'],
-    maxMinutes: rush ? 10 : 25
-  })
-  if (!ok) throw new Error('pas assez de fer trouvé')
+  if (ironTotal() >= cfg.targets.rawIron) {
+    say(bot, '⚡ ' + ironTotal() + ' unités de fer en stock (mineraï + lingots) — je passe le minage')
+  } else {
+    const ok = await branchMine(bot, {
+      y: 16,
+      need: () => ironTotal() >= cfg.targets.rawIron,
+      ores: ['iron_ore', 'deepslate_iron_ore'],
+      extraOres: ['coal_ore', 'deepslate_coal_ore'],
+      maxMinutes: rush ? 10 : 25
+    })
+    if (!ok) throw new Error('pas assez de fer trouvé')
+  }
   say(bot, '🔥 Fonte du fer…')
   await smeltItem(bot, 'raw_iron', 'iron_ingot', cfg.targets.rawIron)
   // rush : pas d'armure en fer (24 lingots perdus), juste l'essentiel
@@ -139,15 +152,19 @@ async function phaseIron (bot, cfg, progress) {
 async function phaseDiamond (bot, cfg, progress) {
   say(bot, '💎 Phase 4 : les diamants (descente vers Y=-58)')
   const rush = !!cfg.rush
-  await digStaircase(bot, -58)
-  const ok = await branchMine(bot, {
-    y: -58,
-    need: () => countItem(bot, 'diamond') >= cfg.targets.diamonds,
-    ores: ['diamond_ore', 'deepslate_diamond_ore'],
-    extraOres: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'],
-    maxMinutes: rush ? 15 : 45
-  })
-  if (!ok) throw new Error('pas assez de diamants trouvés (mauvaise chance…)')
+  if (countItem(bot, 'diamond') >= cfg.targets.diamonds) {
+    say(bot, '⚡ Diamants déjà en stock — je passe le minage')
+  } else {
+    await digStaircase(bot, -58)
+    const ok = await branchMine(bot, {
+      y: -58,
+      need: () => countItem(bot, 'diamond') >= cfg.targets.diamonds,
+      ores: ['diamond_ore', 'deepslate_diamond_ore'],
+      extraOres: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'],
+      maxMinutes: rush ? 15 : 45
+    })
+    if (!ok) throw new Error('pas assez de diamants trouvés (mauvaise chance…)')
+  }
   // rush : 5 diamants = pioche (3) + épée (2), pas d'armure diamant
   if (!rush) {
     for (const piece of ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots']) {

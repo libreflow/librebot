@@ -169,6 +169,17 @@ async function phaseIron (bot, cfg, progress) {
   await digGravelForFlint(bot, Math.max(arrowCrafts + 1 - countItem(bot, 'flint'), 0)) // +1 pour le briquet
   await craftItem(bot, 'flint_and_steel', 1)
   if (countItem(bot, 'feather') >= arrowCrafts) await craftItem(bot, 'arrow', arrows) // silex + bâton + plume
+  // ARC : indispensable pour détruire les cristaux de l'End et blesser le dragon à
+  // distance — il n'était JAMAIS crafté par aucune phase (le run finissait à pieds
+  // nus devant les cristaux). 3 ficelles via mini-chasse aux araignées.
+  if (countItem(bot, 'bow') === 0) {
+    if (countItem(bot, 'string') < 3) {
+      say(bot, '🕷️ Il me faut 3 ficelles pour l\'arc — chasse aux araignées express')
+      await huntMob(bot, ['spider'], { until: () => countItem(bot, 'string') >= 3, maxMinutes: rush ? 3 : 5 })
+    }
+    if (countItem(bot, 'string') >= 3) await craftItem(bot, 'bow', 1)
+    else say(bot, '⚠️ Pas de ficelle — je tenterai l\'arc plus tard (cristaux sans arc = risque)')
+  }
   await craftItem(bot, 'torch', rush ? 8 : 32)
   await eatUntil(bot, rush ? 12 : 18)
 }

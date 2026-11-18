@@ -945,8 +945,15 @@ async function smeltItem (bot, rawName, outName, count) {
   while (countItem(bot, outName) < count && safety++ < 40) {
     const raw = bot.inventory.items().find((i) => i.name === rawName)
     if (!raw) break
-    const fuel = bot.inventory.items().find((i) =>
+    let fuel = bot.inventory.items().find((i) =>
       FUEL_NAMES.has(i.name))
+    if (!fuel) {
+      // récolte au fur et à mesure : le combustible manque mais le charbon est minable —
+      // on va en chercher un peu au lieu d'abandonner la fonte
+      log('🔥 plus de combustible — je vais chercher du charbon pour finir la fonte')
+      try { await ensureResource(bot, 'coal', Math.max(1, Math.ceil((count - countItem(bot, outName)) / 8))) } catch {}
+      fuel = bot.inventory.items().find((i) => FUEL_NAMES.has(i.name))
+    }
     if (!fuel) { log('plus de combustible'); break }
     chat(bot, 'smelting', { out: outName })
     const furnace = await bot.openFurnace(furnaceBlock)
@@ -1440,7 +1447,8 @@ async function sortInventory (bot) {
 
 // Jette les items inutiles (dirt, gravel, rotten_flesh si pas affamé, etc.)
 async function dropJunk (bot, keep = ['dirt', 'cobblestone', 'stone']) {
-  const junkNames = ['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'bone', 'string']
+  // string retiré : indispensable pour l'arc (cristaux/dragon) — ce n'est pas un junk
+  const junkNames = ['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'bone']
   let dropped = 0
   for (const item of bot.inventory.items()) {
     if (junkNames.includes(item.name) && bot.food > 10) {
@@ -1464,7 +1472,11 @@ const GATHER_RULES = {
   flint: { gravel: true },
   obsidian: { obsidian: true },
   cobblestone: { stone: true },
-  stone: { stone: true }
+  stone: { stone: true },
+  // bûches : la base des planches/bâtons/charbon — collecte rapide par arbres proches
+  oak_log: { wood: true }, birch_log: { wood: true }, spruce_log: { wood: true },
+  jungle_log: { wood: true }, acacia_log: { wood: true }, dark_oak_log: { wood: true },
+  cherry_log: { wood: true }, mangrove_log: { wood: true }, pale_oak_log: { wood: true }
 }
 
 // Amène l'inventaire à `count` de `name` via la récolte adaptée ; true si atteint.
@@ -1480,6 +1492,11 @@ async function ensureResource (bot, name, count) {
     await makeObsidian(bot, count)
   } else if (rule.stone) {
     await collectBlocks(bot, ['stone', 'cobblestone'], count, { maxDistance: 64, maxMinutes: 4 })
+  } else if (rule.wood) {
+    const LOGS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log']
+    // mémoriser les arbres ramassés au passage (recordDiscovery déjà fait dans collectBlocks)
+    await collectBlocks(bot, LOGS, count, { maxDistance: 64, maxMinutes: 3 })
+    // pas de bûche obtenue ? tentative de transformation des planches restantes (idempotent)
   } else {
     // descente seulement si on est bien au-dessus du filon (sinon on mine sur place)
     if (rule.y < bot.entity.position.y - 8 && bot.game?.dimension === 'overworld') {

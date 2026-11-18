@@ -35,5 +35,18 @@ check(typeof utils.ensureResource === 'function' && typeof utils.GATHER_RULES ==
 // 6. non-régression : les erreurs restent explicites si la récolte échoue
 check(utilsSrc.includes('impossible de récolter'), 'échec de récolte -> message explicite avec comptes')
 
+// 7. couverture complète de la route (re-audit) : bûches + arc + combustible
+const G = utils.GATHER_RULES
+check(G.oak_log && G.oak_log.wood === true, 'bûches récoltables automatiquement (arbres proches)')
+check(G.birch_log && G.dark_oak_log, 'toutes les essences couvertes (birch, dark_oak…)')
+const junkSrc = fs.readFileSync('./src/utils.js', 'utf8')
+const junkLine = junkSrc.slice(junkSrc.indexOf('const junkNames'))
+check(!junkLine.slice(0, 200).includes("'string'"), 'string retiré des junks (nécessaire pour l arc)')
+const phasesSrc2 = fs.readFileSync('./src/phases.js', 'utf8')
+check(phasesSrc2.includes("craftItem(bot, 'bow', 1)"), "l arc est maintenant craft par phaseIron (jamais craft avant !)")
+check(phasesSrc2.indexOf("huntMob(bot, ['spider']") > -1, 'mini-chasse aux araignées pour les ficelles')
+check(utilsSrc.includes('ensureResource(bot, \'coal\''), 'smeltItem : combustible manquant -> charbon auto-récolté')
+
 console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
 process.exit(fails === 0 ? 0 : 1)
+

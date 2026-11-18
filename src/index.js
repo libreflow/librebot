@@ -348,6 +348,16 @@ function createBot () {
     if (bot._farmTimer) { clearInterval(bot._farmTimer); bot._farmTimer = null }
     if (bot._poiTimer) { clearInterval(bot._poiTimer); bot._poiTimer = null }
     try { require('./survie').stopPanic() } catch {} // stoppe le timer de panique global (fuite sinon)
+    // CRITIQUE reconnexion : la boucle mission ne survit PAS à une déconnexion —
+    // si une phase attendait (goTo pendant la coupure), state.running restait true
+    // pour toujours et l'auto-mission croyait que ça tournait : le bot reprenait
+    // « son objectif » gelé sans jamais se réadapter. On force l'état à l'arrêt :
+    // le respawn relancera runMission, qui réévalue le rattrapage inventaire.
+    if (state.running) {
+      state.running = false
+      state.autoResumeAt = null
+      log('🔄 Mission interrompue par la déconnexion — elle sera relancée au reconnect (avec rattrapage inventaire)')
+    }
     // idem pour l'état de follow (timer + cible peuvent référencer l'ancien bot)
     if (state.followTimer) { clearInterval(state.followTimer); state.followTimer = null }
     state.following = null

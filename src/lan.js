@@ -30,4 +30,33 @@ function resolveTarget (config, logDir) {
   return { host: config.lanHost || '127.0.0.1', port }
 }
 
-module.exports = { readLanPort, resolveTarget }
+
+// ---------- Découverte automatique : annonces Open-to-LAN (multicast UDP) ----------
+// Minecraft diffuse le MOTD du monde ouvert en multicast 224.0.2.60:4445 sous la
+// forme "[MOTD]pseudo's local game[AD]61871" — [AD] contient le port réel,
+// quel qu'il soit. On écoute et on prend le premier port annoncé.
+const dgram = require('dgram')
+function listenLanAnnounce (timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    let sock = null
+    let done = false
+    const finish = (port) => {
+      if (done) return
+      done = true
+      if (sock) { try { sock.dropMembership('224.0.2.60') } catch {}; try { sock.close() } catch {} }
+      resolve(port)
+    }
+    try {
+      sock = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+      sock.on('message', (buf) => {
+        const m = buf.toString('utf8').match(/\[AD\](\d{2,5})/)
+        if (m) finish(Number(m[1]))
+      })
+      sock.on('error', () => finish(null))
+      sock.bind(4445, () => { try { sock.addMembership('224.0.2.60') } catch {} })
+      setTimeout(() => finish(null), timeoutMs)
+    } catch { resolve(null) }
+  })
+}
+
+module.exports = { readLanPort, resolveTarget, listenLanAnnounce }

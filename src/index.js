@@ -78,10 +78,20 @@ function versionAtLeast (v, ref) {
 
 // Fallback automatique : si la cible principale est down (ECONNREFUSED…),
 // on bascule sur l'autre (LAN <-> Aternos) au lieu de boucler sur rien.
-function createBot () {
-  const tgt = target.resolve(config)
+async function createBot () {
+  let tgt = target.resolve(config)
+  if (!tgt && config.lan) {
+    // Aucun port dans les logs/client : on écoute les annonces Open-to-LAN
+    // (multicast 224.0.2.60:4445) — fonctionne avec n'importe quel port local
+    log('🔍 Pas de port LAN dans les logs — j\'écoute les annonces "Ouvrir au réseau local" (6 s)…')
+    const port = await require('./lan').listenLanAnnounce(6000)
+    if (port) {
+      tgt = { host: config.lanHost || '127.0.0.1', port, lan: true }
+      log('📡 Monde LAN découvert automatiquement : port ' + port)
+    }
+  }
   if (!tgt) {
-    log('⛔ config.lan = true mais aucun monde solo ouvert au LAN détecté.')
+    log('⛔ config.lan = true mais aucun monde solo ouvert au LAN détecté (logs + multicast).')
     log('   → Ouvre ton monde : Échap → "Ouvrir au réseau local". Nouvelle tentative dans 15 s…')
     if (!target.getAlt() && config.fallback !== false) { target.setAlt(true); log('   → LAN indisponible, je bascule sur Aternos (' + (config.aternosHost || config.host) + ':' + (config.aternosPort || config.port) + ')') }
     setTimeout(createBot, 15000)

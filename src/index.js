@@ -145,6 +145,28 @@ async function createBot () {
   // --- événements ---
 
   let protocolPatched = false
+  // Téléportation (opérateur / tp du joueur) : un saut de position en un tick
+  // ne peut pas être une marche. On annule le trajet en cours au lieu de courir
+  // à travers la map pour retourner à l'ancien objectif.
+  let _lastTpPos = null
+  bot.on('physicsTick', () => {
+    try {
+      const pos = bot.entity?.position
+      if (!pos) return
+      if (_lastTpPos) {
+        if (pos.distanceTo(_lastTpPos) > 32 && Date.now() - (bot._tpAt ?? 0) > 3000) {
+          bot._tpAt = Date.now()
+          log('🌀 Téléportation détectée — trajet annulé, je garde mon objectif mais je le re-planifie autour d\'ici')
+          try { bot.pathfinder.stop() } catch {}
+          try { bot.clearControlStates() } catch {}
+          try { bot.pvp?.stop?.() } catch {}
+        }
+      }
+      _lastTpPos = pos.clone()
+    } catch {}
+  })
+
+
   bot.on('spawn', () => {
     // connexion LAN réussie : on mémorise le port qui marche (les prochaines
     // reconnexions l'utilisent direct, sans re-découverte de 6 s)

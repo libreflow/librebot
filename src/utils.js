@@ -219,6 +219,7 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
   if (!bot.entity?.position) return false
   const target = new Vec3(tx, ty, tz)
   const t0 = Date.now()
+  const tp0 = bot._tpAt ?? 0 // téléportation pendant le trajet = objectif obsolète
   let lastPos = bot.entity.position.clone()
   let lastMove = Date.now()
   let lastDig = 0
@@ -233,6 +234,7 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
   try {
     while (Date.now() - t0 < timeoutMs) {
       if (bot._fleeing && !ignoreFlee) return false
+      if ((bot._tpAt ?? 0) !== tp0) { clear(); return false } // tp = on n'y va plus
       const pos = bot.entity.position
       const d2 = Math.hypot(target.x - pos.x, target.z - pos.z)
       // arrivé = à côté horizontalement (un joueur ne vise pas le même Y exact)
@@ -363,6 +365,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
   const speedTracker = setInterval(() => { try { legit.trackMovement(bot) } catch {} }, 500)
   const t0 = Date.now()
   const remaining = () => timeout - (Date.now() - t0)
+  const tp0 = bot._tpAt ?? 0 // annulé si téléportation opérateur
   // Marche directe façon joueur, par segments de ~48 blocs pour les longues distances
   const pt = goalPoint(bot, goal)
   if (pt) {
@@ -378,6 +381,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
         const mz = pos.z + Math.sin(ang) * step
         log(`🚶 marche directe (segment) vers (${Math.round(mx)}, ${Math.round(mz)}) — ${Math.round(dist)} blocs restants`)
         const ok = await walkDirect(bot, mx, pt.y, mz, { range: 2, timeoutMs: Math.min(12000, remaining()), ignoreFlee: force })
+        if ((bot._tpAt ?? 0) !== tp0) { clearInterval(speedTracker); return false }
         if (!ok) { if (++segmentFails >= 2) break } else segmentFails = 0
       } else {
         log(`🚶 marche directe vers (${Math.round(pt.x)}, ${Math.round(pt.z)}) à ${Math.round(dist)} blocs`)
@@ -393,6 +397,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
   if (remaining() <= 5000) { log('✗ déplacement échoué : plus de temps'); return false }
   let lastErr = null
   for (let i = 0; i <= retries; i++) {
+    if ((bot._tpAt ?? 0) !== tp0) { log('🌀 téléporté — trajet annulé, je réévalue sur place'); return false }
     if (bot._fleeing && !force) { log('🏃 fuite en cours — trajet annulé'); return false }
     // court trajet (< 24 blocs) : pas besoin de 20 s de calcul A* — si la marche directe
     // a échoué à quelques blocs, la cible est presque toujours infranchissable, on rend vite la main

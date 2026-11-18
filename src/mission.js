@@ -3,7 +3,7 @@
 // Orchestrateur : séquence de phases, progression persistante,
 // gestion des morts, commandes chat.
 // ============================================================
-const { log, say, chat, proactive, announce, sleep, goTo, GoalFollow, GoalNear, GoalXZ, GoalY, GoalBlock, Vec3, countItem, hasAnyItem, withTimeout, eatUntil, pillarUp, equipName, equipBestSword, collectNearbyItems, isItemDrop, lootNearbyChests } = require('./utils')
+const { log, say, chat, proactive, announce, sleep, goTo, GoalFollow, GoalNear, GoalXZ, GoalY, GoalBlock, Vec3, countItem, isSolidBlock, hasAnyItem, withTimeout, eatUntil, pillarUp, equipName, equipBestSword, collectNearbyItems, isItemDrop, lootNearbyChests } = require('./utils')
 
 // helpers locaux (évite un cycle d'import avec survie.js)
 const isNight = (bot) => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t <= 23000 }
@@ -228,7 +228,7 @@ async function waitSafe (bot) {
     const pos = bot.entity.position.floored()
     for (const dy of [-1, -2]) {
       const blk = bot.blockAt(pos.offset(0, dy, 0))
-      if (blk && blk.boundingBox === 'solid' && blk.name !== 'bedrock' && !blk.name.includes('ore')) {
+      if (isSolidBlock(blk) && blk.name !== 'bedrock' && !blk.name.includes('ore')) {
         await digBlock(bot, blk, 6000).catch(() => {})
       }
     }
@@ -409,7 +409,7 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
                 try {
                   const target = base.offset(dx, dy, dz)
                   const ground = bot.blockAt(target.offset(0, -1, 0))
-                  if (!ground || ground.boundingBox !== "solid") continue
+                  if (!isSolidBlock(ground)) continue
                   if (bot.blockAt(target)?.name !== "air") continue
                   await equipName(bot, blockName, "hand")
                   await bot.lookAt(target.offset(0.5, 0.5, 0.5))

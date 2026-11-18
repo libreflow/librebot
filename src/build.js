@@ -3,7 +3,7 @@
 // Construction : pose d'un plan de blocs + maison de base.
 // ============================================================
 const { Vec3, log, say, chat, sleep, goTo, GoalNear, GoalXZ, equipName, findSolidNeighbor, pillarUp,
-  countItem, collectBlocks, mcData, blockId, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
+  countItem, collectBlocks, mcData, blockId, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, isSolidBlock } = require('./utils')
 
 // Pose une liste de blocs (triés du bas vers le haut).
 async function placePlan (bot, positions, blockName) {
@@ -15,7 +15,7 @@ async function placePlan (bot, positions, blockName) {
     if (fails > 15) break
     const current = bot.blockAt(p)
     if (current && current.name === blockName) { placed++; continue }
-    if (current && current.boundingBox === 'solid' && current.name !== 'air') { fails++; continue }
+    if (isSolidBlock(current)) { fails++; continue }
     // s'élever si la cible est trop haute (échafaudage en cobble)
     const dy = p.y - bot.entity.position.y
     if (dy > 3) {
@@ -53,7 +53,7 @@ async function findFlatSpot (bot, size = 6) {
         let ground = null
         for (let dy = 6; dy > -6; dy--) {
           const b = bot.blockAt(new Vec3(cx, y + dy, cz))
-          if (b && b.boundingBox === 'solid') { ground = y + dy + 1; break }
+          if (isSolidBlock(b)) { ground = y + dy + 1; break }
         }
         if (ground === null) continue
         let flat = true
@@ -62,7 +62,7 @@ async function findFlatSpot (bot, size = 6) {
             const g = bot.blockAt(new Vec3(cx + i, ground - 1, cz + j))
             const a1 = bot.blockAt(new Vec3(cx + i, ground, cz + j))
             const a2 = bot.blockAt(new Vec3(cx + i, ground + 1, cz + j))
-            if (!g || g.boundingBox !== 'solid' || !a1 || a1.name !== 'air' || !a2 || a2.name !== 'air') flat = false
+            if (!isSolidBlock(g) || !a1 || a1.name !== 'air' || !a2 || a2.name !== 'air') flat = false
           }
         }
         if (flat) return new Vec3(cx, ground, cz)

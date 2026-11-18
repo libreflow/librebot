@@ -80,6 +80,12 @@ function countItem (bot, name) {
   return n
 }
 
+// Bloc « solide plein » : prismarine-block renvoie boundingBox 'block' (et 'empty'),
+// JAMAIS 'solid' — tous les anciens tests `=== 'solid'` étaient donc toujours FAUX.
+function isSolidBlock (b) {
+  return !!b && (b.boundingBox === 'block' || b.boundingBox === 'solid')
+}
+
 // Vrai si l'inventaire contient au moins un des noms — UN SEUL passage
 // (évite d'appeler countItem() N fois = N parcours complets de l'inventaire)
 function hasAnyItem (bot, names) {
@@ -186,7 +192,7 @@ function watchBlockChanges (bot) {
   if (bot._blockWatchInstalled) return
   bot._blockWatchInstalled = true
   bot.on('blockUpdate', (oldBlock, newBlock) => {
-    if (oldBlock.boundingBox === 'solid' && (newBlock.name === 'air' || newBlock.name === 'cave_air')) {
+    if (isSolidBlock(oldBlock) && (newBlock.name === 'air' || newBlock.name === 'cave_air')) {
       const pos = bot.entity?.position
       if (pos && newBlock.position.distanceTo(pos) < 10) {
         setTimeout(() => {
@@ -391,8 +397,8 @@ function landAngle (bot) {
       const z = Math.floor(pos.z + Math.sin(ang) * d)
       const b = bot.blockAt(new Vec3(x, pos.y, z))
       const bUp = bot.blockAt(new Vec3(x, pos.y + 1, z))
-      if (b && b.boundingBox === 'solid') score++
-      if (bUp && bUp.boundingBox === 'solid') score -= 2 // mur = pas de la terre ouverte
+      if (isSolidBlock(b)) score++
+      if (isSolidBlock(bUp)) score -= 2 // mur = pas de la terre ouverte
     }
     if (score > bestScore) { bestScore = score; bestAng = ang }
   }
@@ -964,8 +970,8 @@ async function shootWithBow (bot, target, maxTries = 3) {
 async function placeBlockFromInventory (bot, name) {
   if (countItem(bot, name) === 0) throw new Error(`pas de ${name} dans l'inventaire`)
   const base = bot.entity.position.floored()
-  // anneaux de plus en plus larges (r max 2 : ~24 positions × 2 dy = 48 tests max,
-  // contre ~96 × 4 blockAt = ~400 blockAt avec r=3), et on teste y-1 (plat) puis y-2 (pente)
+  // anneaux de plus en plus larges (r max 2 : ~24 positions × 2 dy = 48 tests max),
+  // et on teste y-1 (plat) puis y-2 (pente)
   const candidates = []
   for (let r = 1; r <= 2; r++) {
     for (let dx = -r; dx <= r; dx++) {
@@ -975,11 +981,12 @@ async function placeBlockFromInventory (bot, name) {
       }
     }
   }
+  // passe 1 : emplacement idéal — sol solide, 2 blocs d'air au-dessus, ligne de vue libre
   for (const [dx, dz] of candidates) {
     for (const dy of [-1, -2]) {
       const groundPos = new Vec3(base.x + dx, base.y + dy, base.z + dz)
       const ground = bot.blockAt(groundPos)
-      if (!ground || ground.boundingBox !== 'solid') continue
+      if (!isSolidBlock(ground)) continue
       const above = bot.blockAt(groundPos.offset(0, 1, 0))
       const above2 = bot.blockAt(groundPos.offset(0, 2, 0))
       if (!above || above.name !== 'air') continue
@@ -993,6 +1000,30 @@ async function placeBlockFromInventory (bot, name) {
       } catch (e) {}
     }
   }
+  // passe 2 : sous une canopée (dark forest…), aucun emplacement idéal n'existe :
+  // on dégage les blocs « mous » (feuilles, herbe, neige) au-dessus du sol puis on pose.
+  // Ces blocs sont solides pour la ligne de vue mais se minent instantanément.
+  const isSoft = (b) => b && (b.name.endsWith('_leaves') || ['tall_grass', 'short_grass', 'grass', 'fern', 'dead_bush', 'snow'].includes(b.name))
+  for (const [dx, dz] of candidates) {
+    for (const dy of [-1, -2]) {
+      const groundPos = new Vec3(base.x + dx, base.y + dy, base.z + dz)
+      const ground = bot.blockAt(groundPos)
+      if (!isSolidBlock(ground)) continue
+      const above = bot.blockAt(groundPos.offset(0, 1, 0))
+      const above2 = bot.blockAt(groundPos.offset(0, 2, 0))
+      if (!isSoft(above)) continue
+      if (above2 && !isSoft(above2) && above2.name !== 'air') continue
+      if (groundPos.distanceTo(bot.entity.position) > 4.2) continue
+      try {
+        try { await digBlock(bot, above, 1500) } catch (e) {}
+        if (above2 && isSoft(above2)) { try { await digBlock(bot, above2, 1500) } catch (e) {} }
+        if (!legit.canReach(bot, groundPos.offset(0, 1, 0)) && bot.entity.position.offset(0, 1.62, 0).distanceTo(groundPos.offset(0.5, 1.5, 0.5)) > 4.2) continue
+        await equipName(bot, name, 'hand')
+        await bot.placeBlock(ground, new Vec3(0, 1, 0))
+        return bot.blockAt(groundPos.offset(0, 1, 0))
+      } catch (e) {}
+    }
+  }
   throw new Error(`aucun emplacement pour poser ${name}`)
 }
 
@@ -1000,7 +1031,7 @@ function findSolidNeighbor (bot, pos) {
   const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
   for (const [dx, dy, dz] of dirs) {
     const b = bot.blockAt(pos.offset(dx, dy, dz))
-    if (b && b.boundingBox === 'solid') return b
+    if (isSolidBlock(b)) return b
   }
   return null
 }
@@ -1019,7 +1050,7 @@ async function pillarUp (bot, targetY, blockName = 'cobblestone') {
     const feet = bot.entity.position.floored()
     const ref = bot.blockAt(new Vec3(feet.x, feet.y - 2, feet.z))
     try {
-      if (ref && ref.boundingBox === 'solid') await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      if (isSolidBlock(ref)) await bot.placeBlock(ref, new Vec3(0, 1, 0))
       else fails++
     } catch (e) { fails++ }
     bot.setControlState('jump', false)
@@ -1285,4 +1316,4 @@ module.exports = {
   digStaircase, ascendTo, branchMine,
   getWaterBucket, makeObsidian, refillBucket, digGravelForFlint,
   trackEyeOfEnder
-}
+, isSolidBlock }

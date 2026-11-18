@@ -7,7 +7,7 @@ const {
   equipBestSword, pillarUp, digBlock,
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
-  eatUntil, huntMob, shootWithBow, placeBlockFromInventory,
+  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock,
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests,
   digGravelForFlint, trackEyeOfEnder
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
@@ -287,7 +287,7 @@ async function phasePearls (bot, cfg, progress) {
           const pos = bot.entity.position.floored()
           for (const dy of [-1, -2]) {
             const blk = bot.blockAt(pos.offset(0, dy, 0))
-            if (blk && blk.boundingBox === 'solid' && blk.name !== 'bedrock') await digBlock(bot, blk, 4000).catch(() => {})
+            if (isSolidBlock(blk) && blk.name !== 'bedrock') await digBlock(bot, blk, 4000).catch(() => {})
           }
         } catch {}
       }
@@ -509,7 +509,7 @@ async function findGroundBelow (bot) {
   const feet = bot.entity.position.floored()
   for (let dy = -1; dy > -150; dy--) {
     const b = bot.blockAt(feet.offset(0, dy, 0))
-    if (b && b.boundingBox === 'solid') return feet.y + dy + 1
+    if (isSolidBlock(b)) return feet.y + dy + 1
   }
   return 0
 }
@@ -549,7 +549,7 @@ async function safeDescend (bot) {
     const feet = bot.entity.position.floored()
     const below = bot.blockAt(feet.offset(0, -1, 0))
     const sideBlocks = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => bot.blockAt(feet.offset(dx, -1, dz)))
-    const side = sideBlocks.find((b) => b && b.boundingBox === 'solid')
+    const side = sideBlocks.find((b) => isSolidBlock(b))
     try {
       const blockName = countItem(bot, 'cobblestone') > 0 ? 'cobblestone' : 'dirt'
       await equipName(bot, blockName, 'hand')

@@ -61,6 +61,8 @@ function canReach (bot, blockPos, maxReach = REACH_SURVIVAL) {
 // Vérifie la ligne de vue entre deux points (bresenham 3D simplifié)
 function hasLineOfSight (bot, from, to) {
   const steps = Math.ceil(from.distanceTo(to) * 2) // 2 échantillons par bloc
+  const dest = to.floored()
+  let prev = from.floored()
   for (let i = 1; i < steps; i++) {
     const t = i / steps
     const p = new Vec3(
@@ -68,8 +70,14 @@ function hasLineOfSight (bot, from, to) {
       from.y + (to.y - from.y) * t,
       from.z + (to.z - from.z) * t
     )
-    const b = bot.blockAt(p.floored())
-    if (b && b.boundingBox === 'solid') return false // un bloc solide bloque la vue
+    const bf = p.floored()
+    // le bloc de destination ne bloque pas sa propre ligne de vue, et on ne
+    // re-teste pas deux fois le même bloc (les échantillons près de l'arrivée
+    // atterrissaient DANS le bloc cible → tout bloc adjacent paraissait masqué)
+    if (bf.equals(dest) || bf.equals(prev)) continue
+    prev = bf
+    const b = bot.blockAt(bf)
+    if (b && (b.boundingBox === 'block' || b.boundingBox === 'solid')) return false // un bloc solide bloque la vue
   }
   return true
 }

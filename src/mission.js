@@ -545,7 +545,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         }
         if (!ok) {
           chat(bot, 'phaseBlocked', { label: ph.label, attempts: strat.attempts }, { force: true })
-          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais. Dis-moi "reprendre" pour retenter.')
+          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais — je réessaierai seul dans 10 min Dis-moi "reprendre" pour retenter.')
+          state.autoResumeAt = Date.now() + 10 * 60000
+          log('🕒 auto-reprise programmée dans 10 min — le rattrapage inventaire profitera du temps écoulé')
           saveProgress(progress)
           return
         }

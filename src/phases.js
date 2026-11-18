@@ -258,13 +258,35 @@ async function phaseFortress (bot, cfg, progress) {
   say(bot, '🏰 Phase 8 : recherche de la forteresse')
   const bricksId = md(bot).blocksByName.nether_bricks?.id
   if (!bricksId) throw new Error('nether_bricks inconnu pour cette version — forteresse introuvable')
+  // MÉMOIRE d'abord : une forteresse déjà vue (run précédent, mort ici) est retournée
+  // directement en cohérence avec progress.fortress conservé à la mort
+  if (progress.fortress) {
+    say(bot, '🧠 Je connais déjà une forteresse (' + progress.fortress[0] + ', ' + progress.fortress[2] + ')')
+    await goTo(bot, new GoalNear(progress.fortress[0], progress.fortress[1], progress.fortress[2], 3), { timeout: 180000, retries: 1 }).catch(() => {})
+    const found = bot.findBlocks({ matching: bricksId, maxDistance: 48, count: 6 })
+    if (found.length) {
+      progress.fortress = [found[0].x, found[0].y, found[0].z]
+      chat(bot, 'chestFound', { dist: Math.round(found[0].distanceTo(bot.entity.position)) })
+      try { await lootNearbyChests(bot, 48, 5) } catch {}
+      return
+    }
+  }
+  // EXPLORATION PROGRESSIVE : avant, des marches aléatoires ±150 blocs qui
+  // pouvaient tourner en rond ; maintenant une spirale croissante autour du
+  // portail (rayon × 1.3 à chaque tour), qui balaye tout le Nether proche
+  const anchor = progress.netherPortal ? { x: progress.netherPortal[0], z: progress.netherPortal[2] } : { x: bot.entity.position.x, z: bot.entity.position.z }
   let fortress = null
+  let radius = 150
+  let angle = Math.random() * Math.PI * 2
   for (let i = 0; i < 40 && !fortress; i++) {
     const spots = bot.findBlocks({ matching: bricksId, maxDistance: 96, count: 6 })
     if (spots.length) fortress = spots[0]
     else {
-      const { x, z } = bot.entity.position
-      await goTo(bot, new GoalXZ(x + (Math.random() * 2 - 1) * 150, z + (Math.random() * 2 - 1) * 150), { timeout: 90000, retries: 0 })
+      const tx = anchor.x + Math.cos(angle) * radius
+      const tz = anchor.z + Math.sin(angle) * radius
+      angle += Math.PI / 3 // 6 points de spirale par tour
+      radius *= 1.08
+      await goTo(bot, new GoalXZ(tx, tz), { timeout: 90000, retries: 0 })
     }
     if (bot.health < 14) await eatUntil(bot)
   }
@@ -273,6 +295,8 @@ async function phaseFortress (bot, cfg, progress) {
   say(bot, '🏰 Forteresse repérée en (' + fortress.x + ', ' + fortress.y + ', ' + fortress.z + ')')
   await goTo(bot, new GoalNear(fortress.x, fortress.y, fortress.z, 2), { timeout: 120000, retries: 1 })
   progress.fortress = [fortress.x, fortress.y, fortress.z]
+  // mémoriser pour les runs futurs (le cerveau y reviendra directement)
+  learn.recordDiscovery('fortress', fortress)
   // looter les coffres de la forteresse au passage
   try { await lootNearbyChests(bot, 48, 5) } catch {}
 }

@@ -957,6 +957,20 @@ const FUEL_NAMES = new Set(['coal', 'charcoal', 'oak_planks', 'spruce_planks', '
 
 async function eatUntil (bot, target = 18) {
   let safety = 0
+  // RÉFLEXE CUISINE : si la seule nourriture est CRUE mais qu'on peut cuire
+  // (four possible + combustible), on cuit d'abord — poulet cru = poison, et
+  // la viande cuite restaure plus. Une seule fois par appel pour ne pas boucler.
+  try {
+    const hasCooked = FOOD_NAMES.some((f) => f.startsWith('cooked_') || ['golden_apple', 'bread', 'apple'].includes(f)) && countItem(bot, 'cooked_beef') + countItem(bot, 'cooked_porkchop') + countItem(bot, 'cooked_chicken') + countItem(bot, 'cooked_mutton') + countItem(bot, 'bread') + countItem(bot, 'golden_apple') > 0
+    const hasFuel = [...FUEL_NAMES].some((f) => countItem(bot, f) > 0)
+    const rawFood = ['beef', 'porkchop', 'chicken', 'mutton'].reduce((a, f) => a + countItem(bot, f), 0)
+    if (!hasCooked && rawFood > 0 && hasFuel && bot.food < target) {
+      const rawName = ['beef', 'porkchop', 'chicken', 'mutton'].find((f) => countItem(bot, f) > 0)
+      const cookedName = { beef: 'cooked_beef', porkchop: 'cooked_porkchop', chicken: 'cooked_chicken', mutton: 'cooked_mutton' }[rawName]
+      log('🍳 Réflexe cuisine : je cuis ' + Math.min(4, rawFood) + 'x ' + rawName + ' avant de manger cru')
+      await smeltItem(bot, rawName, cookedName, Math.min(4, rawFood))
+    }
+  } catch {}
   while (bot.food < target && safety++ < 10) {
     // manger par PRIORITÉ (cuite avant crue, dorée/pain avant viande crue) :
     // avant, c'était le premier item de l'inventaire → poulet cru et risque de poison

@@ -213,6 +213,12 @@ function createBot () {
             const idle = Date.now() - require('./chat').getLastLogAt()
             if (idle > 150000) {
               try { bot.pathfinder.stop() } catch {}
+              // auto-reprise programmée après un blocage de phase : le bot retente seul
+              if (!state.running && state.autoResumeAt && Date.now() > state.autoResumeAt) {
+                state.autoResumeAt = null
+                log('🕒 Auto-reprise : je relance la mission (retour avec rattrapage inventaire)')
+                runMission(bot, config).catch((e) => log('mission error : ' + e.message))
+              }
               try { bot.pvp.stop() } catch {}
               try { bot.clearControlStates() } catch {}
               // un avertissement max tous les 150 s (avant : spam toutes les 20 s quand la mission était bloquée)

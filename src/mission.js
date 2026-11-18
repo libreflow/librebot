@@ -416,75 +416,75 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
           if (waitedFlee >= 600000) { log('⚠️ Fuite bloquée depuis > 10 min — je force la reprise'); bot._fleeing = false }
         }
       }
-      // Comportement joueur survival la nuit sans arme :
+      // Phases 100% sous terre : la nuit ne compte pas — les mobs de surface ne
+      // descendent pas, on ne perd pas 5 min à attendre le jour (bot moins « lazy »)
+      const UNDERGROUND_PHASES = { pierre: 1, fer: 1, diamant: 1, obsidienne: 1 }
+      // Comportement joueur survival la nuit sans arme (phases de surface uniquement) :
       // 1. Dormir dans un lit (avance le temps jusqu'au matin)
       // 2. Sinon abri d'urgence 3x3 + torche
       // 3. Fallback : pilier de 6 blocs
-      let waited = 0
-      let lastNightLog = 0
-      let shelterDone = false
-      while (isNight(bot) && !hasWeapon(bot) && waited < 300000 && !state.paused) {
-        if (Date.now() - lastNightLog > 30000) { lastNightLog = Date.now(); log("🌙 Nuit et pas d'arme — je me mets à l'abri…") }
-        if (!shelterDone) {
-          shelterDone = true
-          // 1. Lit dans l'inventaire → poser + dormir
-          const bed = bot.inventory.items().find(i => i.name.endsWith("_bed"))
-          if (bed) {
-            log("🛏️ Je pose mon lit et je dors jusqu'au matin")
-            try {
-              const { placeBlockFromInventory } = require("./utils")
-              const placed = await placeBlockFromInventory(bot, bed.name)
-              if (placed) {
-                await withTimeout(bot.sleep(placed), 15000)
-                let slept = 0
-                while (isNight(bot) && slept < 120000) { await sleep(2000); slept += 2000 }
-                try { await bot.wake() } catch {}
-                break
-              }
-            } catch (e) { log("dodo raté: " + e.message) }
+      if (isNight(bot) && !UNDERGROUND_PHASES[ph.key] && !hasWeapon(bot)) {
+        log('🌙 Nuit sans arme — solution rapide puis JE BOSSE QUAND MÊME')
+        // 0. La vraie réponse à la nuit : une arme de fortune (craft à la volée)
+        try {
+          const { craftItem } = require('./utils')
+          if (countItem(bot, 'stick') >= 1 && countItem(bot, 'cobblestone') >= 2) await craftItem(bot, 'stone_sword', 1)
+          else if (countItem(bot, 'stick') >= 1 && bot.inventory.items().some(i => i.name.endsWith('_planks') && i.count >= 2)) {
+            await craftItem(bot, 'wooden_sword', 1)
           }
-          // 2. Abri d'urgence 3x3 + torche
-          const blockName = ["dirt", "cobblestone", "stone", "oak_planks"].find(n => countItem(bot, n) >= 12)
-          if (blockName && countItem(bot, "torch") > 0) {
-            log("🏠 Abri d'urgence 3x3 + torche pour la nuit")
-            try {
-              const { placeBlockFromInventory } = require("./utils")
-              const base = bot.entity.position.floored()
-              const spots = []
-              for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-                if (Math.abs(dx) === 1 || Math.abs(dz) === 1) spots.push([dx, 0, dz], [dx, 1, dz], [dx, 2, dz])
-                spots.push([dx, 3, dz]) // toit
-              }
-              let placedCount = 0
-              for (const [dx, dy, dz] of spots) {
-                if (countItem(bot, blockName) <= 0) break
-                try {
-                  const target = base.offset(dx, dy, dz)
-                  const ground = bot.blockAt(target.offset(0, -1, 0))
-                  if (!isSolidBlock(ground)) continue
-                  if (bot.blockAt(target)?.name !== "air") continue
-                  await equipName(bot, blockName, "hand")
-                  await bot.lookAt(target.offset(0.5, 0.5, 0.5))
-                  await bot.placeBlock(ground, new Vec3(0, 1, 0))
-                  placedCount++
-                  await sleep(150)
-                } catch {}
-              }
-              try { await placeBlockFromInventory(bot, "torch") } catch {}
-              log("🏠 Abri posé: " + placedCount + " blocs")
-            } catch (e) {}
-          }
-          // 3. Fallback pilier
-          if (!blockName) {
-            const anyBlock = ["dirt", "cobblestone", "stone"].find(n => countItem(bot, n) > 5)
-            if (anyBlock) {
-              log("🧱 Pilier de secours pour la nuit")
-              try { await pillarUp(bot, bot.entity.position.y + 6, anyBlock) } catch {}
+        } catch (e) { log('craft arme de fortune raté : ' + e.message) }
+        // 1. Lit dans l'inventaire → poser + dormir (saute la nuit instantanément)
+        const bed = bot.inventory.items().find(i => i.name.endsWith('_bed'))
+        if (bed) {
+          try {
+            const { placeBlockFromInventory } = require('./utils')
+            const placed = await placeBlockFromInventory(bot, bed.name)
+            if (placed) {
+              await withTimeout(bot.sleep(placed), 15000)
+              let slept = 0
+              while (isNight(bot) && slept < 120000) { await sleep(2000); slept += 2000 }
+              try { await bot.wake() } catch {}
             }
+          } catch (e) { log('dodo raté: ' + e.message) }
+        }
+        // 2. Abri d'urgence 3x3 + torche : protection pendant qu'on travaille
+        const blockName = ['dirt', 'cobblestone', 'stone', 'oak_planks'].find(n => countItem(bot, n) >= 12)
+        if (blockName && countItem(bot, 'torch') > 0) {
+          log('🏠 Nuit : abri d\'urgence 3x3 + torche, puis au boulot')
+          try {
+            const { placeBlockFromInventory } = require('./utils')
+            const base = bot.entity.position.floored()
+            const spots = []
+            for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+              if (Math.abs(dx) === 1 || Math.abs(dz) === 1) spots.push([dx, 0, dz], [dx, 1, dz], [dx, 2, dz])
+              spots.push([dx, 3, dz]) // toit
+            }
+            let placedCount = 0
+            for (const [dx, dy, dz] of spots) {
+              if (countItem(bot, blockName) <= 0) break
+              try {
+                const target = base.offset(dx, dy, dz)
+                const ground = bot.blockAt(target.offset(0, -1, 0))
+                if (!isSolidBlock(ground)) continue
+                if (bot.blockAt(target)?.name !== 'air') continue
+                await equipName(bot, blockName, 'hand')
+                await bot.lookAt(target.offset(0.5, 0.5, 0.5))
+                await bot.placeBlock(ground, new Vec3(0, 1, 0))
+                placedCount++
+                await sleep(150)
+              } catch {}
+            }
+            try { await placeBlockFromInventory(bot, 'torch') } catch {}
+            log('🏠 Abri posé: ' + placedCount + ' blocs')
+          } catch (e) {}
+        // 3. Fallback pilier
+        } else {
+          const anyBlock = ['dirt', 'cobblestone', 'stone'].find(n => countItem(bot, n) > 5)
+          if (anyBlock) {
+            try { await pillarUp(bot, bot.entity.position.y + 6, anyBlock) } catch {}
           }
         }
-        await sleep(5000)
-        waited += 5000
+        log(isNight(bot) && !hasWeapon(bot) ? '🌙 Protection de nuit en place — je bosse quand même (le watchdog de survie couvre les mobs)' : '☀️ Nuit gérée — au boulot')
       }
       state.currentPhase = ph.key
       speedrun.setPhase(ph.key) // attribue les morts à la bonne phase dans la baseline
@@ -545,9 +545,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         }
         if (!ok) {
           chat(bot, 'phaseBlocked', { label: ph.label, attempts: strat.attempts }, { force: true })
-          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais — je réessaierai seul dans 10 min Dis-moi "reprendre" pour retenter.')
-          state.autoResumeAt = Date.now() + 10 * 60000
-          log('🕒 auto-reprise programmée dans 10 min — le rattrapage inventaire profitera du temps écoulé')
+          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais — je réessaierai seul dans 5 min Dis-moi "reprendre" pour retenter.')
+          state.autoResumeAt = Date.now() + 5 * 60000
+          log('🕒 auto-reprise programmée dans 5 min — le rattrapage inventaire profitera du temps écoulé')
           saveProgress(progress)
           return
         }

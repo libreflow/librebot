@@ -47,6 +47,15 @@ check(phasesSrc2.includes("craftItem(bot, 'bow', 1)"), "l arc est maintenant cra
 check(phasesSrc2.indexOf("huntMob(bot, ['spider']") > -1, 'mini-chasse aux araignées pour les ficelles')
 check(utilsSrc.includes('ensureResource(bot, \'coal\''), 'smeltItem : combustible manquant -> charbon auto-récolté')
 
+
+// 8. ponts & précautions vide/lave
+check(utils.countBridgeBlocks && utils.ensureBridgeBlocks, 'countBridgeBlocks + ensureBridgeBlocks exportés')
+check(G.netherrack && G.end_stone, 'netherrack et end_stone récoltables (ponts sur place)')
+const phasesSrc3 = fs.readFileSync('./src/phases.js', 'utf8')
+const fortressZone = phasesSrc3.slice(phasesSrc3.indexOf('async function phaseFortress'), phasesSrc3.indexOf('async function phaseBlaze'))
+check(fortressZone.includes('ensureBridgeBlocks(bot, 32)'), 'forteresse : réserve de ponts garantie AVANT exploration (lave du Nether)')
+check(phasesSrc3.includes('PRÉCAUTION END') && utils.ensureBridgeBlocks, 'End : réserve de blocs avant l île principale (vide mortel)')
+
 console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
 process.exit(fails === 0 ? 0 : 1)
 

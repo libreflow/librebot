@@ -1471,8 +1471,11 @@ const GATHER_RULES = {
   coal: { y: 32, ores: ['coal_ore', 'deepslate_coal_ore'], extra: [], maxMinutes: 8 },
   flint: { gravel: true },
   obsidian: { obsidian: true },
-  cobblestone: { stone: true },
-  stone: { stone: true },
+  cobblestone: { stone: ['stone', 'cobblestone'] },
+  stone: { stone: ['stone', 'cobblestone'] },
+  netherrack: { stone: ['netherrack'] }, // ponts du Nether
+  end_stone: { stone: ['end_stone'] }, // ponts de l'End
+  cobbled_deepslate: { stone: ['cobbled_deepslate'] },
   // bûches : la base des planches/bâtons/charbon — collecte rapide par arbres proches
   oak_log: { wood: true }, birch_log: { wood: true }, spruce_log: { wood: true },
   jungle_log: { wood: true }, acacia_log: { wood: true }, dark_oak_log: { wood: true },
@@ -1491,7 +1494,7 @@ async function ensureResource (bot, name, count) {
   } else if (rule.obsidian) {
     await makeObsidian(bot, count)
   } else if (rule.stone) {
-    await collectBlocks(bot, ['stone', 'cobblestone'], count, { maxDistance: 64, maxMinutes: 4 })
+    await collectBlocks(bot, rule.stone, count, { maxDistance: 64, maxMinutes: 4 })
   } else if (rule.wood) {
     const LOGS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log']
     // mémoriser les arbres ramassés au passage (recordDiscovery déjà fait dans collectBlocks)
@@ -1513,6 +1516,29 @@ async function ensureResource (bot, name, count) {
   return have() >= count
 }
 
+// ---------- Ponts & précautions vide/lave ----------
+// Blocs utilisables pour bâtir un pont (le pathfinder en pose en marchant)
+const BRIDGE_BLOCKS = ['cobblestone', 'stone', 'cobbled_deepslate', 'dirt', 'netherrack', 'end_stone',
+  'oak_planks', 'spruce_planks', 'birch_planks', 'dark_oak_planks', 'jungle_planks', 'acacia_planks']
+
+function countBridgeBlocks (bot) {
+  return BRIDGE_BLOCKS.reduce((a, n) => a + countItem(bot, n), 0)
+}
+
+// PRÉCAUTION : garantir une réserve de blocs avant de traverser une zone
+// vide/lave (forteresse du Nether, lacunes de l'End, grottes profondes).
+// Dans le Nether on pille du netherrack, dans l'End de la pierre de l'End —
+// récoltés SUR PLACE (le cobblestone est introuvable hors overworld).
+async function ensureBridgeBlocks (bot, min = 32) {
+  if (countBridgeBlocks(bot) >= min) return true
+  const dim = bot.game?.dimension ?? 'overworld'
+  const localName = dim === 'the_nether' ? 'netherrack' : (dim === 'the_end' ? 'end_stone' : 'cobblestone')
+  say(bot, '🧱 Précaution pont : seulement ' + countBridgeBlocks(bot) + ' blocs de construction — je prends du ' + localName + ' avant de traverser')
+  const ok = await ensureResource(bot, localName, Math.max(min - countBridgeBlocks(bot), 8))
+  say(bot, ok ? '🧱 ' + countBridgeBlocks(bot) + ' blocs de pont en réserve' : '⚠️ réserve de blocs insuffisante — prudence sur les ponts')
+  return ok
+}
+
 // Wrappers sûrs : sur un serveur qui lag (ou 26.1 avec PartialReadError), les
 // promesses mineflayer (activateBlock, placeBlock, equip…) peuvent pendre indéfiniment.
 // Ces wrappers ajoutent un timeout pour que la mission puisse reprendre.
@@ -1527,7 +1553,7 @@ module.exports = {
   Vec3, log, sleep, say, chat, proactive, announce, isItemDrop, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, watchBlockChanges, sortInventory, dropJunk, legit, rand, randInt, withTimeout, mcData, blockId, countItem, hasAnyItem, findEntities, equipName, digBlock,
   setMovements, goTo, walkDirect, GoalNear, GoalXZ, GoalY, GoalBlock, GoalFollow, explore, enterDimension,
   collectBlocks, collectNearbyItems, lootNearbyChests, lootSingleChest, isChestLooted,
-  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw, GATHER_RULES, ensureResource,
+  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw, GATHER_RULES, ensureResource, countBridgeBlocks, ensureBridgeBlocks,
   eatUntil, FOOD_NAMES,
   equipBestSword, equipShield, huntMob, shootWithBow,
   placeBlockFromInventory, findSolidNeighbor, pillarUp,

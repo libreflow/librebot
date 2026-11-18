@@ -7,7 +7,7 @@ const {
   equipBestSword, pillarUp, digBlock,
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
-  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock,
+  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock, ensureBridgeBlocks,
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests,
   digGravelForFlint, trackEyeOfEnder
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
@@ -272,6 +272,9 @@ async function phaseFortress (bot, cfg, progress) {
   say(bot, '🏰 Phase 8 : recherche de la forteresse')
   const bricksId = md(bot).blocksByName.nether_bricks?.id
   if (!bricksId) throw new Error('nether_bricks inconnu pour cette version — forteresse introuvable')
+  // PRÉCAUTION NETHER : les passerelles de forteresse surplombent la lave —
+  // garantir des blocs pour bâtir/relier avant d'explorer (ici, du netherrack local)
+  try { await ensureBridgeBlocks(bot, 32) } catch {}
   // MÉMOIRE d'abord : une forteresse déjà vue (run précédent, mort ici) est retournée
   // directement en cohérence avec progress.fortress conservé à la mort
   if (progress.fortress) {
@@ -605,6 +608,8 @@ function isCaged (bot, pos) {
 
 async function gotoEndIsland (bot) {
   say(bot, '🌉 Je rejoins l\'île principale…')
+  // PRÉCAUTION END : le vide est mortel — réserve de blocs pour les ponts
+  try { await ensureBridgeBlocks(bot, 32) } catch {}
   await goTo(bot, new GoalXZ(0, 0), { timeout: 120000, retries: 1 })
   await sleep(1000)
 }

@@ -2,4 +2,9 @@ node_modules/
 config.json
 progress.json
 learning.json
+worldmap.json
 *.log
+.bot.lock
+.watchdog.lock
+nul
+audit-*.js

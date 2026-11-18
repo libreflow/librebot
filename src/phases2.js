@@ -5,12 +5,12 @@
 // Chaque tâche est isolée : un échec ne bloque pas les autres.
 // ============================================================
 const {
-  Vec3, log, say, sleep, withTimeout, mcData, countItem, equipName, equipShield,
+  Vec3, log, say, sleep, withTimeout, mcData, blockId, countItem, findEntities, equipName, equipShield,
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem, eatUntil,
   huntMob, equipBestSword, shootWithBow, placeBlockFromInventory, findSolidNeighbor,
   digStaircase, ascendTo, makeObsidian
-} = require('./utils')
+, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
 const { buildHouse, buildNetherPortal, placePlan } = require('./build')
 const S = require('./skills')
 const { record, saveProgress } = require('./advancements')
@@ -19,7 +19,9 @@ const { record, saveProgress } = require('./advancements')
 async function runTasks (bot, cfg, progress, label, tasks) {
   say(bot, `━━━ 🛠️ Atelier : ${label} ━━━`)
   for (const task of tasks) {
-    while (bot.health < 12) { await eatUntil(bot); await sleep(3000) }
+    // compteur de sécurité : évite la boucle infinie si le bot n'a plus rien à manger
+    let starve = 0
+    while (bot.health < 12 && starve++ < 10) { await eatUntil(bot); await sleep(3000) }
     try {
       log(`▶ tâche : ${task.name}`)
       const ok = await task.run(bot, cfg, progress)
@@ -35,9 +37,10 @@ async function runTasks (bot, cfg, progress, label, tasks) {
 
 async function honeyWorkshop (bot) {
   say(bot, '🐝 Ruche : miel, mielcomb et bloc de miel')
-  const md = mcData(bot)
-  let hive = bot.findBlock({ matching: md.blocksByName.beehive?.id, maxDistance: 96 })
-  if (!hive) { await explore(bot, 120); hive = bot.findBlock({ matching: md.blocksByName.beehive?.id, maxDistance: 96 }) }
+  const hiveId = blockId(bot, 'beehive')
+  if (!hiveId) throw new Error('beehive inconnu pour cette version')
+  let hive = bot.findBlock({ matching: hiveId, maxDistance: 96 })
+  if (!hive) { await explore(bot, 120); hive = bot.findBlock({ matching: hiveId, maxDistance: 96 }) }
   if (!hive) throw new Error('pas de ruche à portée')
   // feu de camp sous la ruche (évite d'agacer les abeilles)
   await craftItem(bot, 'campfire', 1)
@@ -45,7 +48,7 @@ async function honeyWorkshop (bot) {
   if (under && under.name === 'air') {
     try {
       await equipName(bot, 'campfire', 'hand')
-      await bot.placeBlock(hive, new Vec3(0, -1, 0))
+      await placeSafe(bot, hive, new Vec3(0, -1, 0))
     } catch (e) {}
   }
   await goTo(bot, new GoalNear(hive.position.x, hive.position.y, hive.position.z, 2), { timeout: 30000, retries: 0 })
@@ -54,14 +57,14 @@ async function honeyWorkshop (bot) {
   for (let i = 0; i < 3; i++) {
     try {
       await equipName(bot, 'glass_bottle', 'hand')
-      await bot.activateBlock(hive)
+      await actBlock(bot, hive)
       await sleep(700)
     } catch (e) {}
   }
   // mielcomb avec cisailles (matière première de Wax On)
   try {
     await equipName(bot, 'shears', 'hand')
-    await bot.activateBlock(hive)
+    await actBlock(bot, hive)
     await sleep(700)
     await collectNearbyItems(bot, 8, 6000)
   } catch (e) {}
@@ -75,10 +78,10 @@ async function honeyWorkshop (bot) {
     if (countItem(bot, 'copper_block') > 0) {
       const copper = await placeBlockFromInventory(bot, 'copper_block')
       await equipName(bot, 'honeycomb', 'hand')
-      await bot.activateBlock(copper) // cirer (Wax On)
+      await actBlock(bot, copper) // cirer (Wax On)
       await sleep(400)
       await equipName(bot, 'iron_axe', 'hand')
-      await bot.activateBlock(copper) // décirer (Wax Off)
+      await actBlock(bot, copper) // décirer (Wax Off)
       await sleep(400)
     }
   }
@@ -89,9 +92,9 @@ async function sniperAttempt (bot) {
   say(bot, '🎯 Duel de sniper : squelette à 50 m')
   const sk = bot.nearestEntity((e) => e.name === 'skeleton' && e.position.distanceTo(bot.entity.position) < 64)
   if (!sk) throw new Error('pas de squelette')
-  // s'éloigner à 52+ blocs
-  const dir = sk.position.minus(bot.entity.position).normalize()
-  const far = sk.position.plus(dir.scaled(54))
+  // s'éloigner à 52+ blocs (garde : normalize() d'un vecteur nul → NaN)
+  const dir = sk.position.minus(bot.entity.position)
+  const far = sk.position.plus((dir.length() > 0.5 ? dir.normalize() : new Vec3(1, 0, 0)).scaled(54))
   await goTo(bot, new GoalXZ(Math.floor(far.x), Math.floor(far.z)), { timeout: 60000, retries: 0 })
   if (sk.position.distanceTo(bot.entity.position) < 50) throw new Error('pas assez loin')
   for (let i = 0; i < 6; i++) {
@@ -161,9 +164,14 @@ function wAventureOverworld () {
             const ground = await findGroundBelow(bot)
             bot.setControlState('forward', true)
             try { await bot.look(bot.entity.yaw, 1.4) } catch {}
-            while (bot.entity.position.y - ground > 12) await sleep(40)
+            // garde temporelle anti boucle infinie (bot bloqué mid-air)
+            const fallT0 = Date.now()
+            while (bot.entity.position.y - ground > 12) {
+              if (Date.now() - fallT0 > 20000) break
+              await sleep(40)
+            }
             await equipName(bot, 'water_bucket', 'hand')
-            await bot.activateItem()
+            await actItem(bot)
             await sleep(2500)
             bot.setControlState('forward', false)
             return bot.health > 0
@@ -178,7 +186,8 @@ function wAventureOverworld () {
 // helpers locaux pour la chute
 async function findGroundBelow (bot) {
   const feet = bot.entity.position.floored()
-  for (let dy = -1; dy > -400; dy--) {
+  // 150 blocs max : au-delà c'est le vide absolu, on retourne 0 de toute façon
+  for (let dy = -1; dy > -150; dy--) {
     const b = bot.blockAt(feet.offset(0, dy, 0))
     if (b && b.boundingBox === 'solid') return feet.y + dy + 1
   }
@@ -203,7 +212,7 @@ async function bastionAttempt (bot, progress) {
     try {
       const chest = await bot.openContainer(block)
       try {
-        for (const item of chest.items()) {
+        for (const item of chest.containerItems()) { // containerItems(), pas items() (TypeError sinon)
           try { await chest.withdraw(item.type, null, item.count) } catch (e) {}
         }
       } finally { try { chest.close() } catch {} }
@@ -220,7 +229,9 @@ function wNether () {
     run: async (bot, cfg, progress) => {
       // retourner au Nether : portail existant ou nouveau
       const md = mcData(bot)
-      let portal = bot.findBlock({ matching: md.blocksByName.nether_portal?.id, maxDistance: 128 })
+      const npId = blockId(bot, 'nether_portal')
+      // guard : matching undefined matcherait tous les blocs
+      let portal = npId ? bot.findBlock({ matching: npId, maxDistance: 128 }) : null
       if (!portal) {
         if (countItem(bot, 'obsidian') < 14) {
           await digStaircase(bot, -50)
@@ -228,9 +239,9 @@ function wNether () {
           await ascendTo(bot, 68)
         }
         const pos = await buildNetherPortal(bot)
-        await goTo(bot, new GoalNear(pos.x, pos.y, pos.z, 0), { timeout: 30000, retries: 1 })
+        await goTo(bot, new GoalNear(pos.x, pos.y, pos.z, 0.5), { timeout: 30000, retries: 1 })
       } else {
-        await goTo(bot, new GoalNear(portal.position.x, portal.position.y, portal.position.z, 0), { timeout: 60000, retries: 1 })
+        await goTo(bot, new GoalNear(portal.position.x, portal.position.y, portal.position.z, 0.5), { timeout: 60000, retries: 1 })
       }
       const ok = await enterDimension(bot, 'the_nether', 45000)
       if (!ok) throw new Error('impossible d\'entrer dans le Nether')
@@ -250,7 +261,7 @@ function wNether () {
             await craftItem(bot, 'compass', 1)
             const lode = await placeBlockFromInventory(bot, 'lodestone')
             await equipName(bot, 'compass', 'hand')
-            await bot.activateBlock(lode)
+            await actBlock(bot, lode)
             await sleep(500)
             return true
           }
@@ -265,7 +276,7 @@ function wNether () {
             const table = await placeBlockFromInventory(bot, 'smithing_table')
             // interaction smithing : best effort via activate
             await equipName(bot, 'netherite_ingot', 'hand')
-            await bot.activateBlock(table)
+            await actBlock(bot, table)
             await sleep(1000)
             return true
           }
@@ -281,7 +292,7 @@ function wNether () {
             for (let i = 0; i < 4; i++) {
               try {
                 await equipName(bot, 'glowstone', 'hand')
-                await bot.activateBlock(anchor)
+                await actBlock(bot, anchor)
                 await sleep(400)
               } catch (e) {}
             }
@@ -294,8 +305,8 @@ function wNether () {
           run: async () => {
             const tears = await S.huntGhastsForTears(bot, 4, 12)
             // longue-vue sur un ghast si améthyste dispo
-            const md2 = mcData(bot)
-            const amethyst = bot.findBlock({ matching: md2.blocksByName.amethyst_cluster?.id, maxDistance: 96 })
+            const amethystId = blockId(bot, 'amethyst_cluster')
+            const amethyst = amethystId ? bot.findBlock({ matching: amethystId, maxDistance: 96 }) : null
             if (amethyst) {
               await collectBlocks(bot, ['amethyst_cluster'], 2, { maxDistance: 96, maxMinutes: 2 })
               if (countItem(bot, 'copper_ingot') >= 2) {
@@ -303,8 +314,8 @@ function wNether () {
                 const ghast = bot.nearestEntity((e) => e.name === 'ghast' && e.position.distanceTo(bot.entity.position) < 64)
                 if (ghast) {
                   await equipName(bot, 'spyglass', 'hand')
-                  await bot.lookAt(ghast.position)
-                  await bot.activateItem()
+                  await lookSafe(bot, ghast.position)
+                  await actItem(bot)
                   await sleep(2500)
                   try { bot.deactivateItem() } catch {}
                   return tears
@@ -319,9 +330,9 @@ function wNether () {
       ]
       await runTasks(bot, cfg, progress, 'Tour du Nether', tasks)
       // retour overworld
-      const portalBack = bot.findBlock({ matching: md.blocksByName.nether_portal?.id, maxDistance: 128 })
+      const portalBack = npId ? bot.findBlock({ matching: npId, maxDistance: 128 }) : null
       if (portalBack) {
-        await goTo(bot, new GoalNear(portalBack.position.x, portalBack.position.y, portalBack.position.z, 0), { timeout: 120000, retries: 1 })
+        await goTo(bot, new GoalNear(portalBack.position.x, portalBack.position.y, portalBack.position.z, 0.5), { timeout: 120000, retries: 1 })
         await enterDimension(bot, 'overworld', 45000)
       }
     }
@@ -342,18 +353,19 @@ function wWitherBeacon () {
           run: async () => {
             if (countItem(bot, 'wither_skeleton_skull') < 3) throw new Error('pas assez de crânes (grind long au Nether)')
             await collectBlocks(bot, ['soul_sand', 'soul_soil'], 4, { maxDistance: 128, maxMinutes: 3 })
-            // T du wither : 2 étages de sable des âmes + 3 crânes
+            // Forme vanilla du Wither (réf. Minecraft Wiki) : T de 4 soul_sand AU SOL
+            // (3 en ligne + 1 au centre perpendiculaire), puis 3 crânes de wither
+            // skeleton au-dessus des 2 extrémités et du centre du T.
+            // (L'ancien plan posait une croix 3D au niveau 1 → le Wither ne spawnait jamais.)
             const anchor = bot.entity.position.floored().offset(3, 0, 0)
             const plan = [
               { pos: anchor.offset(0, 0, 0), item: 'soul_sand' },
               { pos: anchor.offset(1, 0, 0), item: 'soul_sand' },
               { pos: anchor.offset(-1, 0, 0), item: 'soul_sand' },
-              { pos: anchor.offset(0, 1, 0), item: 'soul_sand' },
-              { pos: anchor.offset(0, 1, -1), item: 'soul_sand' },
-              { pos: anchor.offset(0, 1, 1), item: 'soul_sand' },
+              { pos: anchor.offset(0, 0, 1), item: 'soul_sand' },
               { pos: anchor.offset(1, 1, 0), item: 'wither_skeleton_skull' },
               { pos: anchor.offset(-1, 1, 0), item: 'wither_skeleton_skull' },
-              { pos: anchor.offset(0, 2, 0), item: 'wither_skeleton_skull' }
+              { pos: anchor.offset(0, 1, 1), item: 'wither_skeleton_skull' }
             ]
             for (const step of plan) {
               const ref = findSolidNeighbor(bot, step.pos)
@@ -361,7 +373,7 @@ function wWitherBeacon () {
               try {
                 await goTo(bot, new GoalNear(ref.position.x, ref.position.y, ref.position.z, 1), { timeout: 20000, retries: 0 })
                 await equipName(bot, step.item, 'hand')
-                await bot.placeBlock(ref, step.pos.minus(ref.position))
+                await placeSafe(bot, ref, step.pos.minus(ref.position))
                 await sleep(400)
               } catch (e) { log(`pose wither ratée : ${e.message}`) }
             }
@@ -369,12 +381,12 @@ function wWitherBeacon () {
             await sleep(6000)
             const t0 = Date.now()
             while (Date.now() - t0 < 8 * 60000) {
-              const wither = Object.values(bot.entities).find((e) => e.name === 'wither')
-              if (!wither) break
+              const wither = findEntities(bot, (e) => e.name === 'wither')
+              if (!wither || wither.isValid === false) break // le wither est mort : on sort
               if (bot.health < 14) { await eatUntil(bot); await sleep(4000) }
               try {
                 await equipBestSword(bot)
-                await withTimeout(bot.pvp.attack(wither), 15000)
+                await withTimeout(bot.pvp.attack(wither), 12000)
               } catch (e) { try { bot.pvp.stop() } catch {} }
               await sleep(500)
             }
@@ -413,7 +425,8 @@ function wWitherBeacon () {
               for (let dx = -off; dx <= off; dx++) {
                 for (let dz = -off; dz <= off; dz++) {
                   if (l === layers.length - 1) continue // le beacon lui-même
-                  plan.push(beaconPos.offset(dx - off, y - beaconPos.y, dz - off))
+                  // centré sur beaconPos : offset(dx, …, dz), pas (dx - off, …) qui décalait toute la pyramide
+                  plan.push(beaconPos.offset(dx, y - beaconPos.y, dz))
                 }
               }
             }
@@ -445,19 +458,20 @@ function wEndAgain () {
       // 2. Retourner au stronghold puis dans l'End
       const room = progress.portalRoom
       if (!room) throw new Error('coordonnées du stronghold perdues')
-      await goTo(bot, new GoalXZ(Math.round(room[0]), Math.round(room[2])), { timeout: 300000, retries: 1 })
+      await goTo(bot, new GoalXZ(Math.round(room[0]), Math.round(room[2])), { timeout: 120000, retries: 1 })
       await digStaircase(bot, Math.max(10, room[1] - 5))
       const md = mcData(bot)
-      const portalId = md.blocksByName.end_portal?.id
+      const portalId = blockId(bot, 'end_portal')
+      if (!portalId) throw new Error('end_portal inconnu pour cette version')
       let portal = bot.findBlock({ matching: portalId, maxDistance: 64 })
       if (!portal) { await explore(bot, 24); portal = bot.findBlock({ matching: portalId, maxDistance: 64 }) }
       if (!portal) throw new Error('portail de l\'End introuvable')
-      await goTo(bot, new GoalNear(portal.position.x, portal.position.y, portal.position.z, 0), { timeout: 30000, retries: 1 })
+      await goTo(bot, new GoalNear(portal.position.x, portal.position.y, portal.position.z, 0.5), { timeout: 30000, retries: 1 })
       await enterDimension(bot, 'the_end', 45000)
       // 3. Placer les cristaux sur la fontaine
       say(bot, '💜 Je place les cristaux : le dragon revient !')
-      const exitId = md.blocksByName.end_portal?.id
-      const fountain = bot.findBlock({ matching: exitId, maxDistance: 200 })
+      const exitId = blockId(bot, 'end_portal')
+      const fountain = exitId ? bot.findBlock({ matching: exitId, maxDistance: 200 }) : null
       if (fountain) {
         await goTo(bot, new GoalNear(fountain.position.x, fountain.position.y + 3, fountain.position.z, 2), { timeout: 120000, retries: 0 })
         // 4 positions autour de la fontaine
@@ -470,7 +484,7 @@ function wEndAgain () {
           if (!support) continue
           try {
             await equipName(bot, 'end_crystal', 'hand')
-            await bot.activateBlock(support)
+            await actBlock(bot, support)
             await sleep(800)
           } catch (e) { log(`cristal raté : ${e.message}`) }
         }
@@ -485,11 +499,11 @@ function wEndAgain () {
             await craftItem(bot, 'glass_bottle', 3)
             const t0 = Date.now()
             while (Date.now() - t0 < 120000) {
-              const dragon = Object.values(bot.entities).find((e) => e.name === 'ender_dragon')
+              const dragon = findEntities(bot, (e) => e.name === 'ender_dragon')
               if (dragon && dragon.position.distanceTo(bot.entity.position) < 20) {
                 try {
                   await equipName(bot, 'glass_bottle', 'hand')
-                  await bot.activateItem()
+                  await actItem(bot)
                   await sleep(1500)
                 } catch (e) {}
                 if (countItem(bot, 'dragon_breath') > 0) return true
@@ -504,11 +518,11 @@ function wEndAgain () {
           adv: ['plane'],
           run: async () => {
             if (countItem(bot, 'spyglass') === 0) return false
-            const dragon = Object.values(bot.entities).find((e) => e.name === 'ender_dragon')
+            const dragon = findEntities(bot, (e) => e.name === 'ender_dragon')
             if (!dragon) return false
             await equipName(bot, 'spyglass', 'hand')
-            await bot.lookAt(dragon.position)
-            await bot.activateItem()
+            await lookSafe(bot, dragon.position)
+            await actItem(bot)
             await sleep(3000)
             try { bot.deactivateItem() } catch {}
             return true
@@ -526,8 +540,8 @@ function wEndAgain () {
           name: 'œuf du dragon',
           adv: ['next_gen'],
           run: async () => {
-            const md2 = mcData(bot)
-            const egg = bot.findBlock({ matching: md2.blocksByName.dragon_egg?.id, maxDistance: 32 })
+            const eggId = blockId(bot, 'dragon_egg')
+            const egg = eggId ? bot.findBlock({ matching: eggId, maxDistance: 32 }) : null
             if (!egg) return false
             await craftItem(bot, 'piston', 1)
             await craftItem(bot, 'redstone_torch', 1)
@@ -537,13 +551,13 @@ function wEndAgain () {
             if (ref) {
               await goTo(bot, new GoalNear(side.x, side.y, side.z, 1), { timeout: 30000, retries: 0 })
               await equipName(bot, 'piston', 'hand')
-              await bot.placeBlock(ref, side.minus(ref.position))
+              await placeSafe(bot, ref, side.minus(ref.position))
               // torche de redstone à côté du piston
               const torchSpot = side.offset(0, -1, 0)
               const ref2 = findSolidNeighbor(bot, torchSpot)
               if (ref2) {
                 await equipName(bot, 'redstone_torch', 'hand')
-                await bot.placeBlock(ref2, torchSpot.minus(ref2.position))
+                await placeSafe(bot, ref2, torchSpot.minus(ref2.position))
               }
               await sleep(3000)
               await collectNearbyItems(bot, 16, 10000)
@@ -556,8 +570,8 @@ function wEndAgain () {
           name: 'porte de l\'End (perle)',
           adv: ['remote', 'city', 'skys_limit', 'great_view'],
           run: async () => {
-            const md2 = mcData(bot)
-            const gateway = bot.findBlock({ matching: md2.blocksByName.end_gateway?.id, maxDistance: 128 })
+            const gatewayId = blockId(bot, 'end_gateway')
+            const gateway = gatewayId ? bot.findBlock({ matching: gatewayId, maxDistance: 128 }) : null
             if (!gateway) return false
             if (countItem(bot, 'ender_pearl') === 0) throw new Error('plus de perles')
             await S.throwPearlAt(bot, gateway.position)
@@ -566,14 +580,16 @@ function wEndAgain () {
             const t0 = Date.now()
             while (Date.now() - t0 < 10 * 60000) {
               const purpurId = md2.blocksByName.purpur_block?.id
-              const city = bot.findBlocks({ matching: purpurId, maxDistance: 128, count: 2 })
+              const city = bot.findBlocks({ matching: purpurId, maxDistance: 96, count: 2 })
               if (city.length) { record(bot, ['city'], 'ok'); break }
               const shulker = bot.nearestEntity((e) => e.name === 'shulker')
               if (shulker) {
                 // se faire toucher par un shulker et flotter
                 record(bot, ['great_view'], 'attempt')
                 await goTo(bot, new GoalNear(shulker.position.x, shulker.position.y, shulker.position.z, 6), { timeout: 30000, retries: 0 })
-                await sleep(15000) // flotter si touché
+                await sleep(8000) // flotter si touché
+              } else {
+                await sleep(3000) // éviter le busy-loop : findBlocks + explore à chaque itération sinon
               }
               await explore(bot, 80)
             }
@@ -583,10 +599,10 @@ function wEndAgain () {
       ]
       await runTasks(bot, cfg, progress, 'End acte II (suite)', tasks2)
       // rentrer : sauter dans la sortie ou passer le portail
-      const exitId2 = md.blocksByName.end_portal?.id
-      const exit = bot.findBlock({ matching: exitId2, maxDistance: 256 })
+      const exitId2 = blockId(bot, 'end_portal')
+      const exit = exitId2 ? bot.findBlock({ matching: exitId2, maxDistance: 256 }) : null
       if (exit) {
-        await goTo(bot, new GoalNear(exit.position.x, exit.position.y, exit.position.z, 0), { timeout: 180000, retries: 1 })
+        await goTo(bot, new GoalNear(exit.position.x, exit.position.y, exit.position.z, 0.5), { timeout: 120000, retries: 1 })
         await enterDimension(bot, 'overworld', 45000)
       }
     }
@@ -596,7 +612,7 @@ function wEndAgain () {
 // ---------- Atelier 5 : Chasse aux monstres ----------
 
 const HUNT_LIST = ['zombie', 'skeleton', 'creeper', 'spider', 'witch', 'slime', 'zombified_piglin',
-  'magma_cube', 'husk', 'stray', 'cave_spider', 'silverfish', 'drowned', 'phantom', 'spider', 'endermite']
+  'magma_cube', 'husk', 'stray', 'cave_spider', 'silverfish', 'drowned', 'phantom', 'endermite'] // 'spider' était en double
 
 function wMonsters () {
   return {
@@ -605,9 +621,10 @@ function wMonsters () {
     run: async (bot, cfg, progress) => {
       say(bot, '👾 Chasse aux monstres de l\'Overworld')
       progress.mobsKilled ??= []
+      const killedSet = new Set(progress.mobsKilled) // O(1) au lieu de includes() dans la boucle
       const t0 = Date.now()
       for (const mob of HUNT_LIST) {
-        if (progress.mobsKilled.includes(mob)) continue
+        if (killedSet.has(mob)) continue
         if (Date.now() - t0 > 25 * 60000) break
         try {
           const target = bot.nearestEntity((e) =>
@@ -617,6 +634,7 @@ function wMonsters () {
           await huntMob(bot, [mob], { until: () => target.isValid === false, maxMinutes: 4 })
           if (target.isValid === false) {
             progress.mobsKilled.push(mob)
+            killedSet.add(mob)
             saveProgress(progress)
           }
         } catch (e) { /* suivant */ }
@@ -676,11 +694,12 @@ function wDiet () {
       }
       // manger tout ce qui est comestible dans la liste
       let eaten = 0
+      const eatenSet = new Set(progress.foodsEaten) // O(1) au lieu de includes()
       for (const food of DIET_FOODS) {
-        if (progress.foodsEaten.includes(food)) { eaten++; continue }
+        if (eatenSet.has(food)) { eaten++; continue }
         try {
           const ok = await S.eatItem(bot, food, 1)
-          if (ok) { progress.foodsEaten.push(food); eaten++; saveProgress(progress) }
+          if (ok) { progress.foodsEaten.push(food); eatenSet.add(food); eaten++; saveProgress(progress) }
         } catch (e) {}
         await sleep(300)
       }

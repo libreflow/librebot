@@ -2,8 +2,8 @@
 // LibreBot — src/build.js
 // Construction : pose d'un plan de blocs + maison de base.
 // ============================================================
-const { Vec3, log, say, sleep, goTo, GoalNear, GoalXZ, equipName, findSolidNeighbor, pillarUp,
-  countItem, collectBlocks, mcData } = require('./utils')
+const { Vec3, log, say, chat, sleep, goTo, GoalNear, GoalXZ, equipName, findSolidNeighbor, pillarUp,
+  countItem, collectBlocks, mcData, blockId, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
 
 // Pose une liste de blocs (triés du bas vers le haut).
 async function placePlan (bot, positions, blockName) {
@@ -30,7 +30,7 @@ async function placePlan (bot, positions, blockName) {
     try {
       await equipName(bot, blockName, 'hand')
       const face = p.minus(ref.position)
-      await bot.placeBlock(ref, face)
+      await placeSafe(bot, ref, face)
       placed++
       fails = 0
       await sleep(120)
@@ -42,9 +42,11 @@ async function placePlan (bot, positions, blockName) {
 // Trouve un terrain plat de `size` × `size` autour du bot
 async function findFlatSpot (bot, size = 6) {
   const { x, y, z } = bot.entity.position.floored()
-  for (let r = 0; r < 24; r += 4) {
-    for (let dx = -r; dx <= r; dx += 4) {
-      for (let dz = -r; dz <= r; dz += 4) {
+  // pas de 6 au lieu de 4 : divise par ~2 le nombre de positions testées
+  // (avant : jusqu'à ~15 000 blockAt avec le pas de 4)
+  for (let r = 0; r < 24; r += 6) {
+    for (let dx = -r; dx <= r; dx += 6) {
+      for (let dz = -r; dz <= r; dz += 6) {
         const cx = x + dx
         const cz = z + dz
         // trouver le sol au-dessus (colonne la plus proche)
@@ -72,6 +74,7 @@ async function findFlatSpot (bot, size = 6) {
 
 // Construit une petite maison 5×5 (murs en planches, toit en cobble).
 async function buildHouse (bot) {
+  chat(bot, 'building', {}, { force: true })
   say(bot, '🏠 Je construis la base')
   const md = mcData(bot)
   const size = 5
@@ -123,12 +126,14 @@ async function buildHouse (bot) {
     const { placeBlockFromInventory } = require('./utils')
     if (countItem(bot, 'torch') >= 1) await placeBlockFromInventory(bot, 'torch')
   } catch (e) { log(`torche intérieure ratée : ${e.message}`) }
-  say(bot, `🏠 Base construite en (${anchor.x}, ${anchor.y}, ${anchor.z})`)
+  chat(bot, 'built', { x: anchor.x, y: anchor.y, z: anchor.z }, { force: true })
+  say(bot, '🏠 Base construite en (' + anchor.x + ', ' + anchor.y + ', ' + anchor.z + ')')
   return anchor
 }
 
 // Cadre de portail du Nether (14 obsidienne), puis allumage.
 async function buildNetherPortal (bot) {
+  chat(bot, 'building', {}, { force: true })
   say(bot, '🔥 Je construis le portail du Nether')
   const anchor = await findFlatSpot(bot, 6)
   const w = 4
@@ -141,22 +146,25 @@ async function buildNetherPortal (bot) {
   }
   for (let x2 = 0; x2 < w; x2++) plan.push(anchor.offset(x2, h - 1, 0)) // sommet
   const placed = await placePlan(bot, plan, 'obsidian')
-  if (placed < 12) throw new Error(`portail incomplet (${placed}/14 blocs posés)`)
+  // 10 obsidiennes suffisent : les 4 coins d'un portail 4×5 sont optionnels (speedrun)
+  if (placed < 10) throw new Error(`portail incomplet (${placed}/14 blocs posés, 10 minimum)`)
   // allumer
   const inner = anchor.offset(1, 1, 0)
   await goTo(bot, new GoalNear(inner.x, inner.y, inner.z, 1), { timeout: 20000, retries: 0 })
   await equipName(bot, 'flint_and_steel', 'hand')
   const obsidian = bot.blockAt(anchor.offset(1, 0, 0))
-  await bot.lookAt(obsidian.position.offset(0.5, 1.1, 0.5))
+  await lookSafe(bot, obsidian.position.offset(0.5, 1.1, 0.5))
   let ignited = false
-  try { await bot.activateBlock(obsidian); ignited = true } catch {}
+  try { await actBlock(bot, obsidian); ignited = true } catch {}
   if (!ignited) {
-    try { await bot.activateItem() } catch {}
+    try { await actItem(bot) } catch {}
   }
   await sleep(1500)
-  const md = mcData(bot)
-  const portalBlock = bot.findBlock({ matching: md.blocksByName.nether_portal?.id, maxDistance: 8 })
+  const portalId = blockId(bot, 'nether_portal')
+  // guard : matching undefined matcherait tous les blocs
+  const portalBlock = portalId ? bot.findBlock({ matching: portalId, maxDistance: 8 }) : null
   if (!portalBlock) throw new Error('le portail ne s\'allume pas')
+  chat(bot, 'portalBuilt', {}, { force: true })
   say(bot, '🔥 Portail allumé !')
   return portalBlock.position
 }

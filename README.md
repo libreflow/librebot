@@ -27,7 +27,34 @@ npm start
 
 Le bot gère tout le reste : file d'attente Aternos, serveur qui dort, reconnexion auto toutes les 30 s, morts (il repart de zéro en gardant les coordonnées découvertes).
 
+## 🏠 Jouer avec le bot dans ton monde solo (LAN)
+
+Oui, le bot peut te rejoindre dans ton monde solo :
+
+1. Dans ton monde : **Échap → « Ouvrir au réseau local »** (Open to LAN). Note le port annoncé dans le chat (tu peux aussi en fixer un fixe dans les options du LAN).
+2. Dans `config.json` : mets `"lan": true` (et laisse `"auth": "offline"` — le serveur LAN accepte les comptes offline).
+3. `npm start` **sur la même machine** que le jeu. Le bot lit tout seul le port dans `.minecraft/logs/latest.log` et se connecte à `127.0.0.1:<port>`.
+
+Si le bot tourne sur **un autre PC** du même réseau, ajoute `"lanHost": "192.168.1.x"` (IP de la machine qui héberge le monde). Si aucun monde n'est ouvert au LAN, le bot réessaie toutes les 15 s avec un message explicite. Pour revenir à Aternos : remets `"lan": false`.
+
+Astuce : dans ton monde solo, `/op LibreBot` lui donne les droits d'opérateur (utile pour tester).
+
+## ⚡ Mode rush (speedrun : minimum de ressources)
+
+Mets `"rush": true` dans `config.json` : le bot vise le strict minimum pour tuer le dragon,
+le plus vite possible :
+
+- **cibles minimales** : fer 12, diamants 5 (pioche + épée seulement), obsidienne 10 (portail sans les coins), 7 bâtons de blaze, 14 perles, 12 yeux de l'Ender
+- **phase 1** : 4 bûches au lieu de 12, outils bois directs
+- **phase 2** : 12 cobble (pioche + fourneau), pas les 4 outils en pierre
+- **phase 3** : pas d'armure en fer, pas de hache/pelle fer, 16 flèches/torches
+- **phase 4** : pas d'armure diamant
+- **phase 6** : pas de maison construite
+- **fin** : seules les 13 phases de la mission tournent (les 6 ateliers de succès sont sautés)
+
 ## 👁️ Regarder le bot jouer
+
+Le dashboard affiche aussi les **40 dernières lignes du log en direct** (`/api/logs`), la **cible de connexion courante** (LAN/Aternos + fallback), le **streak de morts** et la version du serveur (`/api/state`).
 
 - **Dans ton jeu (recommandé)** : connecte-toi avec ton pseudo, puis :
   ```
@@ -44,12 +71,19 @@ Le bot gère tout le reste : file d'attente Aternos, serveur qui dort, reconnexi
 | `stop` / `pause` | met le bot en pause |
 | `reprendre` | relance la mission où elle s'était arrêtée |
 | `construire` | construit une maison à l'endroit actuel |
-| `suivre` | le bot te suit |
+| `suivre` / `suivre <pseudo>` | le bot te suit (ou suit le joueur visé) |
+| `arrête suivre` / `ne suis plus` | le bot lâche prise et reprend la mission |
+| `qui tu suis` | savoir qui le bot suit en ce moment |
 | `statut` | avancement de la mission |
 | `succès` | bilan complet des advancements (réussis / tentés / restants) |
 | `reset` | remet la progression à zéro |
 | `mission` / `dragon` | lance la mission si pas déjà lancée |
+| `viens` | le bot vient à toi |
+| `home` / `base` | le bot retourne à sa maison mémorisée |
+| `spawn` | le bot retourne au point de spawn mémorisé |
 
+- **Changer de serveur à chaud** : `lan` (retour au monde solo en LAN), `aternos` (bascule sur Aternos), `serveur <host:port>` (n'importe quel serveur) — le bot se reconnecte tout seul.
+- **Fallback automatique** : si le LAN local est fermé (ECONNREFUSED), le bot bascule tout seul sur Aternos, et inversement. Plus besoin de toucher à `config.json` quand un serveur dort.
 ## 🗺️ La mission (19 phases)
 
 ### Mission dragon (phases 1–13)
@@ -133,6 +167,22 @@ message explicite avec ces deux solutions au lieu d'un crash obscur.
 - **3 essais par phase**, puis pause avec message — tu peux intervenir en jeu puis dire `reprendre`.
 - Reconnexion automatique (Aternos qui dort ou redémarre).
 
+
+### 🚨 Watchdog externe (anti-blocage absolu)
+
+Un process séparé (`watchdog.js`) surveille `bot.log` : si le bot n'écrit plus rien depuis **2 min 30**, il le tue et le relance automatiquement. Même une boucle infinie interne ne peut plus bloquer le bot indéfiniment.
+
+### ☠️ Anti-boucle-de-mort
+
+Le bot compte ses morts rapprochées (< 3 min). Au-delà de 2 : **mode panique** — il attend le jour + 45 s avant de respawn (les zombies brûlent au soleil), fuit en sprint à l'opposé des monstres, s'éloigne à 120 blocs avec vérification réelle de la distance, pose des torches, creuse un trou 1x1x2 pour attendre le jour, et ne reprend la mission qu'une fois la zone sûre.
+
+### ⚖️ Garanties anti-cheat (100% légitime)
+
+Aucun mouvement physiquement impossible : pas de fly, pas de téléportation, pas de minage à travers les murs, pas de vitesse surhumaine.
+
+- Tous les déplacements passent par les contrôles vanilla (`forward`/`jump`/`sprint`…) + la **physique serveur** (gravité, collisions, knockback).
+- `src/legit.js` vérifie en continu : portée de minage ≤ 4,5 blocs **avec ligne de vue**, portée d'attaque ≤ 3 m, vitesse ≤ 5,612 m/s (sprint vanilla), montée continue > 2 s = vol détecté. Périodes de grâce après le spawn et après chaque coup reçu (knockback).
+- Un seul déplacement à la fois (mutex) : le bot ne peut pas oublier d'annuler un mouvement.
 ## ⚠️ Ce qui peut demander des ajustements
 
 C'est un bot qui joue en conditions réelles ; ces étapes sont les plus fragiles,
@@ -165,6 +215,7 @@ et n'hésite pas à redire `reprendre`. Le fichier `progress.json` garde l'état
 }
 ```
 
+- Nouvelles clés : `"fallback": true` (bascule auto LAN ↔ Aternos si un serveur est down), `"aternosHost"` / `"aternosPort"` (cible de secours, ex. `Robinsonx.aternos.me:61339`), `"lanPort"` (port LAN fixe, prioritaire sur la lecture des logs).
 ## ⚖️ Licence
 
 MIT — fais-en ce que tu veux. Amuse-toi bien 🐲

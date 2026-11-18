@@ -156,13 +156,45 @@ const CATALOG = [
 const byKey = Object.fromEntries(CATALOG.map(([key, name, tab, status]) => [key, { key, name, tab, status }]))
 
 // ---------- Tracker ----------
+// Cache en mémoire de progress.json + debounce d'écriture : record() était
+// appelé à chaque tâche d'atelier avec un readFileSync + writeFileSync à
+// chaque fois, ce qui bloquait l'event loop. On ne relit le fichier que si
+// son mtime a changé (écrit ailleurs par mission.js / skills.js).
+let _progressCache = null
+let _progressMtime = 0
+let _advDirty = false
+let _advSaveTimer = null
 
 function loadProgress () {
-  try { return JSON.parse(fs.readFileSync(PROGRESS_PATH, 'utf8')) } catch { return {} }
+  try {
+    const st = fs.statSync(PROGRESS_PATH)
+    if (_progressCache && st.mtimeMs === _progressMtime) return _progressCache
+    _progressCache = JSON.parse(fs.readFileSync(PROGRESS_PATH, 'utf8'))
+    _progressMtime = st.mtimeMs
+  } catch { _progressCache ??= {} }
+  return _progressCache
 }
+
 function saveProgress (p) {
-  try { fs.writeFileSync(PROGRESS_PATH, JSON.stringify(p, null, 2)) } catch (e) { log(`sauvegarde impossible : ${e.message}`) }
+  _progressCache = p
+  _advDirty = true
+  if (_advSaveTimer) return
+  _advSaveTimer = setTimeout(() => {
+    _advSaveTimer = null
+    if (!_advDirty) return
+    _advDirty = false
+    try {
+      fs.writeFileSync(PROGRESS_PATH, JSON.stringify(_progressCache, null, 2))
+      _progressMtime = fs.statSync(PROGRESS_PATH).mtimeMs
+    } catch (e) { log(`sauvegarde impossible : ${e.message}`) }
+  }, 3000)
 }
+
+process.on('exit', () => {
+  if (_advDirty && _progressCache) {
+    try { fs.writeFileSync(PROGRESS_PATH, JSON.stringify(_progressCache, null, 2)) } catch {}
+  }
+})
 
 // Enregistre une tentative de succès ('ok' = réussi, 'attempt' = tenté sans garantie)
 function record (bot, keys, result = 'ok') {

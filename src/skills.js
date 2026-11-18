@@ -9,7 +9,7 @@ const {
   collectBlocks, collectNearbyItems, craftItem, smeltItem, eatUntil,
   huntMob, equipBestSword, placeBlockFromInventory, findSolidNeighbor,
   pillarUp, digStaircase, ascendTo, shootWithBow
-} = require('./utils')
+, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
 
 // ---------- Nourriture ciblée ----------
 
@@ -17,9 +17,9 @@ async function eatItem (bot, name, count = 1) {
   for (let i = 0; i < count; i++) {
     if (countItem(bot, name) === 0) return false
     const item = bot.inventory.items().find((it) => it.name === name)
-    await bot.equip(item, 'hand')
+    await equipSafe(bot, item, 'hand')
     await sleep(150)
-    await bot.activateItem()
+    await actItem(bot)
     await sleep(1800)
     try { bot.deactivateItem() } catch {}
     await sleep(200)
@@ -45,7 +45,7 @@ async function shearSheepForWool (bot, count = 3) {
   return countItem(bot, 'white_wool') >= count
 }
 
-const isNight = (bot) => { const t = bot.time.timeOfDay; return t > 13000 && t < 23000 }
+const isNight = (bot) => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t <= 23000 } // ?. sinon crash si bot.time pas encore reçu
 
 async function sleepInBed (bot) {
   say(bot, '🛏️ Je me fabrique un lit et je dors')
@@ -74,7 +74,7 @@ async function farmWheat (bot) {
   await craftItem(bot, 'wooden_hoe', 1)
   let attempts = 0
   while (countItem(bot, 'wheat_seeds') < 4 && attempts++ < 8) {
-    const got = await collectBlocks(bot, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], 16, { maxDistance: 64, maxMinutes: 2 })
+    const got = await collectBlocks(bot, ['short_grass', 'tall_grass', 'fern', 'large_fern'], 16, { maxDistance: 64, maxMinutes: 2 })
     if (got === 0) await explore(bot, 40)
   }
   if (countItem(bot, 'wheat_seeds') === 0) throw new Error('pas de graines')
@@ -88,13 +88,13 @@ async function farmWheat (bot) {
     if (['dirt', 'grass_block'].includes(block.name) && above.name === 'air') {
       try {
         await equipName(bot, 'wooden_hoe', 'hand')
-        await bot.activateBlock(block)
+        await actBlock(bot, block)
         const farmland = bot.blockAt(p.offset(0, -1, 0))
         if (farmland && farmland.name.includes('farmland')) {
           const seed = bot.inventory.items().find((i) => i.name === 'wheat_seeds')
           if (seed) {
-            await bot.equip(seed, 'hand')
-            await bot.activateBlock(farmland)
+            await equipSafe(bot, seed, 'hand')
+            await actBlock(bot, farmland)
             planted++
             await sleep(300)
           }
@@ -120,7 +120,7 @@ async function growWithBonemeal (bot, minutes = 4) {
       if (countItem(bot, 'bone_meal') === 0) break
       try {
         await equipName(bot, 'bone_meal', 'hand')
-        await bot.activateBlock(b)
+        await actBlock(bot, b)
         await sleep(400)
       } catch (e) {}
     }
@@ -197,13 +197,35 @@ async function tryFish (bot, attempts = 5) {
   await goTo(bot, new GoalNear(water.position.x, water.position.y + 1, water.position.z, 2), { timeout: 30000, retries: 0 })
   for (let i = 0; i < attempts; i++) {
     await equipName(bot, 'fishing_rod', 'hand')
-    await bot.lookAt(water.position.offset(0, 1, 0))
+    await lookSafe(bot, water.position.offset(0, 1, 0))
     await sleep(300)
-    await bot.activateItem()
-    await sleep(8000 + Math.random() * 12000) // attendre une touche
+    await actItem(bot)
+    // Détection par événement (méthode des fishing bots trouvés sur GitHub) :
+    // entity.fishing_bobber.splash = touche détectée → ferrer immédiatement,
+    // au lieu d'attendre 8-20 s au hasard.
+    const gotFish = await new Promise((resolve) => {
+      const timeout = setTimeout(() => { cleanup(); resolve(false) }, 25000) // max 25 s d'attente
+      const onSound = (soundName, position, data, data2) => {
+        const name = String(soundName ?? '')
+        if (name.includes('fishing_bobber.splash') || name.includes('bobber.splash')) {
+          cleanup()
+          setTimeout(() => resolve(true), 600) // petit délai pour laisser le poisson accrocher
+        }
+      }
+      const onCollect = (collector, item) => {
+        if (collector?.username === bot.username && item) { cleanup(); resolve(true) }
+      }
+      const cleanup = () => {
+        clearTimeout(timeout)
+        try { bot.removeListener('soundEffectHeard', onSound) } catch {}
+        try { bot.removeListener('playerCollect', onCollect) } catch {}
+      }
+      bot.on('soundEffectHeard', onSound)
+      bot.on('playerCollect', onCollect)
+    })
     try { bot.deactivateItem() } catch {}
-    await sleep(800)
-    if (FISH_NAMES.some((f) => countItem(bot, f) > 0)) return true
+    await sleep(500)
+    if (gotFish || FISH_NAMES.some((f) => countItem(bot, f) > 0)) return true
   }
   return FISH_NAMES.some((f) => countItem(bot, f) > 0)
 }
@@ -216,7 +238,7 @@ async function findVillage (bot, maxMinutes = 12) {
   while (Date.now() - t0 < maxMinutes * 60000) {
     const villager = bot.nearestEntity((e) => e.name === 'villager' && e.position.distanceTo(bot.entity.position) < 96)
     if (villager) return villager
-    const bell = bot.findBlock({ matching: md.blocksByName.bell?.id, maxDistance: 128 })
+    const bell = bot.findBlock({ matching: md.blocksByName.bell?.id, maxDistance: 96 })
     if (bell) {
       await goTo(bot, new GoalNear(bell.position.x, bell.position.y, bell.position.z, 4), { timeout: 60000, retries: 0 })
       continue
@@ -237,7 +259,7 @@ async function tryTrade (bot, villager) {
       log(`${trades.length} échanges visibles`)
       for (let i = 0; i < trades.length; i++) {
         try {
-          await v.tradeSelect(i)
+          await v.trade(i) // l'API mineflayer s'appelle trade(index), pas tradeSelect
           await sleep(800)
           return true
         } catch (e) { /* essayer l'échange suivant */ }
@@ -257,7 +279,6 @@ async function buildIronGolem (bot) {
   // 3 blocs de fer (27 lingots) + citrouille sculptée
   if (countItem(bot, 'iron_ingot') < 27) {
     await digStaircase(bot, 16)
-    const md = require('minecraft-data')
     const { branchMine } = require('./utils')
     await branchMine(bot, { y: 16, need: () => countItem(bot, 'raw_iron') >= 30, ores: ['iron_ore', 'deepslate_iron_ore'], extraOres: [], maxMinutes: 20 })
     await smeltItem(bot, 'raw_iron', 'iron_ingot', 30)
@@ -268,24 +289,32 @@ async function buildIronGolem (bot) {
   let pumpkin = bot.findBlock({ matching: mcData(bot).blocksByName.pumpkin?.id, maxDistance: 96 })
   if (!pumpkin) { await explore(bot, 120); pumpkin = bot.findBlock({ matching: mcData(bot).blocksByName.pumpkin?.id, maxDistance: 96 }) }
   if (!pumpkin) throw new Error('pas de citrouille pour le golem')
-  const carved = await collectBlocks(bot, ['pumpkin'], 1, { maxDistance: 96, maxMinutes: 2 })
-  // sculpter la citrouille avec des cisailles
-  const p = await placeBlockFromInventory(bot, 'pumpkin')
-  await equipName(bot, 'shears', 'hand')
-  await bot.activateBlock(p)
-  await sleep(400)
-  // T du golem
+  await collectBlocks(bot, ['pumpkin'], 1, { maxDistance: 96, maxMinutes: 2 }) // citrouille pour l'inventaire
+  // T du golem : 4 blocs de fer + citrouille au sommet. On pose une citrouille NORMALE
+  // en haut (carved_pumpkin n'existe pas dans l'inventaire), puis on la sculpte sur place.
   const anchor = bot.entity.position.floored().offset(2, 0, 0)
-  const plan = [anchor, anchor.offset(0, 1, 0), anchor.offset(1, 1, 0), anchor.offset(-1, 1, 0), anchor.offset(0, 2, 0)]
+  const top = anchor.offset(0, 2, 0)
+  const plan = [anchor, anchor.offset(0, 1, 0), anchor.offset(1, 1, 0), anchor.offset(-1, 1, 0), top]
   for (const pos of plan) {
     const ref = findSolidNeighbor(bot, pos)
     if (!ref) continue
     try {
       await goTo(bot, new GoalNear(ref.position.x, ref.position.y, ref.position.z, 1), { timeout: 20000, retries: 0 })
-      await equipName(bot, pos.y === anchor.y + 2 ? 'carved_pumpkin' : 'iron_block', 'hand')
-      await bot.placeBlock(ref, pos.minus(ref.position))
+      await equipName(bot, pos === top ? 'pumpkin' : 'iron_block', 'hand')
+      await placeSafe(bot, ref, pos.minus(ref.position))
       await sleep(300)
     } catch (e) { log(`pose golem ratée : ${e.message}`) }
+  }
+  // sculpter la citrouille posée en haut avec les cisailles → le golem spawne
+  const placedTop = bot.blockAt(top)
+  if (placedTop && placedTop.name === 'pumpkin') {
+    try {
+      await goTo(bot, new GoalNear(top.x, top.y - 1, top.z, 2), { timeout: 20000, retries: 0 })
+      await equipName(bot, 'shears', 'hand')
+      await lookSafe(bot, top.offset(0.5, 0.5, 0.5))
+      await actBlock(bot, placedTop)
+      await sleep(800)
+    } catch (e) { log(`sculpture citrouille ratée : ${e.message}`) }
   }
   return true
 }
@@ -305,8 +334,8 @@ async function fillLavaBucket (bot) {
   if (!lava) throw new Error('pas de lave à portée')
   await goTo(bot, new GoalNear(lava.position.x, lava.position.y + 1, lava.position.z, 1), { timeout: 30000, retries: 0 })
   await equipName(bot, 'bucket', 'hand')
-  await bot.lookAt(lava.position.offset(0.5, 0.5, 0.5))
-  await bot.activateItem()
+  await lookSafe(bot, lava.position.offset(0.5, 0.5, 0.5))
+  await actItem(bot)
   await sleep(500)
   if (countItem(bot, 'lava_bucket') > 0) return true
   throw new Error('remplissage raté')
@@ -324,7 +353,7 @@ async function copperBulbWorkshop (bot) {
   await craftItem(bot, 'copper_bulb', 1)
   const bulb = await placeBlockFromInventory(bot, 'copper_bulb')
   await equipName(bot, 'iron_axe', 'hand')
-  await bot.activateBlock(bulb)
+  await actBlock(bot, bulb)
   await sleep(400)
   return true
 }
@@ -343,9 +372,9 @@ async function targetBlockShoot (bot) {
     if (countItem(bot, 'arrow') === 0) throw new Error('plus de flèches')
     await equipName(bot, 'bow', 'hand')
     // viser au-dessus de la cible pour compenser la gravité
-    await bot.lookAt(target.position.offset(0.5, 1.2 + i * 0.15, 0.5))
+    await lookSafe(bot, target.position.offset(0.5, 1.2 + i * 0.15, 0.5))
     await sleep(300)
-    await bot.activateItem()
+    await actItem(bot)
     await sleep(1100)
     try { bot.deactivateItem() } catch {}
     await sleep(1000)
@@ -362,13 +391,13 @@ async function crossbowShot (bot) {
   }
   await equipName(bot, 'crossbow', 'hand')
   // charger : clic maintenu
-  await bot.activateItem()
+  await actItem(bot)
   await sleep(1400)
   try { bot.deactivateItem() } catch {}
   await sleep(500)
   // tirer
   await bot.look(bot.entity.yaw, 0.3)
-  await bot.activateItem()
+  await actItem(bot)
   await sleep(500)
   return true
 }
@@ -381,7 +410,18 @@ async function enchantAttempt (bot) {
   await craftItem(bot, 'enchanting_table', 1)
   const md = mcData(bot)
   if (countItem(bot, 'lapis_lazuli') === 0) {
-    await craftItem(bot, 'lapis_lazuli', 4) // débloquer le lapis en écrasant le minerai
+    // le lapis ne se craft PAS (c'est un minerai) : on va le miner rapidement, sinon on abandonne proprement
+    const { branchMine } = require('./utils')
+    await digStaircase(bot, 40)
+    await branchMine(bot, {
+      y: -58,
+      need: () => countItem(bot, 'lapis_lazuli') >= 4,
+      ores: ['lapis_ore', 'deepslate_lapis_ore'],
+      extraOres: [],
+      maxMinutes: 6
+    })
+    if (countItem(bot, 'lapis_lazuli') === 0) return false // pas de lapis → on tente pas l'enchantement à l'aveugle
+    await ascendTo(bot, 68)
   }
   const table = await placeBlockFromInventory(bot, 'enchanting_table')
   if (!table) return false
@@ -420,20 +460,29 @@ const NETHER_BIOME_MARKERS = [
 
 async function exploreNetherBiomes (bot, progress, maxMinutes = 25) {
   const md = mcData(bot)
+  // pré-calculer les ids une seule fois (évite map+filter à chaque itération × 5 markers)
+  const markers = NETHER_BIOME_MARKERS.map((m) => ({
+    biome: m.biome,
+    ids: m.blocks.map((b) => md.blocksByName[b]?.id).filter(Boolean)
+  })).filter((m) => m.ids.length)
   const visited = progress.netherBiomes ?? []
   const t0 = Date.now()
   let lastMove = 0
+  let lastScan = 0
   while (Date.now() - t0 < maxMinutes * 60000) {
-    // scanner les blocs marqueurs autour
-    for (const marker of NETHER_BIOME_MARKERS) {
-      if (visited.includes(marker.biome)) continue
-      const ids = marker.blocks.map((b) => md.blocksByName[b]?.id).filter(Boolean)
-      const found = bot.findBlocks({ matching: ids, maxDistance: 96, count: 1 })
-      if (found.length) {
-        visited.push(marker.biome)
-        progress.netherBiomes = visited
-        say(bot, `🗺️ Biome du Nether visité : ${marker.biome} (${visited.length}/5)`)
-        await saveProgress(progress)
+    // scanner les blocs marqueurs toutes les 10 s (pas à chaque tour de 2 s :
+    // 5 findBlocks en rayon 96 toutes les 2 s = ~3750 scans en 25 min)
+    if (Date.now() - lastScan > 10000) {
+      lastScan = Date.now()
+      for (const marker of markers) {
+        if (visited.includes(marker.biome)) continue
+        const found = bot.findBlocks({ matching: marker.ids, maxDistance: 64, count: 1 })
+        if (found.length) {
+          visited.push(marker.biome)
+          progress.netherBiomes = visited
+          say(bot, `🗺️ Biome du Nether visité : ${marker.biome} (${visited.length}/5)`)
+          await saveProgress(progress)
+        }
       }
     }
     if (visited.length >= 5) return true
@@ -446,17 +495,16 @@ async function exploreNetherBiomes (bot, progress, maxMinutes = 25) {
   return visited.length >= 5
 }
 
-async function saveProgress (progress) {
-  const fs = require('fs')
-  const path = require('path')
-  try { fs.writeFileSync(path.join(__dirname, '..', 'progress.json'), JSON.stringify(progress, null, 2)) } catch (e) {}
-}
+// saveProgress délégué à advancements.js : un seul cache/débounce pour progress.json
+// (évite un 3ème écrivain qui entrerait en conflit avec le cache d'advancements)
+const { saveProgress } = require('./advancements')
 
 async function goldToPiglin (bot) {
   say(bot, '🐷 De l\'or aux piglins (Oh Shiny + troc)')
   if (countItem(bot, 'gold_ingot') === 0) {
     const { branchMine } = require('./utils')
-    await branchMine(bot, { y: 100, need: () => countItem(bot, 'gold_ingot') >= 8, ores: ['nether_gold_ore', 'gold_ore', 'deepslate_gold_ore'], extraOres: [], maxMinutes: 10 })
+    // nether_gold_ore génère entre Y=10 et Y=117, pic vers Y~30 (Y=100 = toit rocheux, quasi rien)
+    await branchMine(bot, { y: 32, need: () => countItem(bot, 'raw_gold') >= 8, ores: ['nether_gold_ore', 'gold_ore', 'deepslate_gold_ore'], extraOres: [], maxMinutes: 10 })
     await smeltItem(bot, 'raw_gold', 'gold_ingot', 8)
   }
   const piglin = bot.nearestEntity((e) => e.name === 'piglin' && e.position.distanceTo(bot.entity.position) < 32)
@@ -503,9 +551,9 @@ async function mineAncientDebris (bot, need = 4) {
 async function throwPearlAt (bot, targetPos) {
   await goTo(bot, new GoalNear(targetPos.x, targetPos.y, targetPos.z, 3), { timeout: 60000, retries: 0 })
   await equipName(bot, 'ender_pearl', 'hand')
-  await bot.lookAt(targetPos.offset(0.5, 1, 0.5))
+  await lookSafe(bot, targetPos.offset(0.5, 1, 0.5))
   await sleep(300)
-  await bot.activateItem()
+  await actItem(bot)
   await sleep(3000)
   return true
 }

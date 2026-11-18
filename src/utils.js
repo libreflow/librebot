@@ -771,6 +771,15 @@ async function craftItem (bot, name, count) {
   // utilisé uniquement quand le craft de cet item est réellement demandé
   const smeltRaw = bestSmeltRaw(bot, name)
   if (smeltRaw) {
+    // RÉCOLTE AU FUR ET À MESURE : pas assez de matière première (ex. raw_iron pour
+    // un lingot) ? On va la MINER avant de fondre — on ne s'arrête plus sur
+    // « il manque N x raw_iron » alors que le filon est à 20 blocs.
+    const missingOut = count - countItem(bot, name)
+    const rawAvailable = countItem(bot, smeltRaw)
+    if (rawAvailable < missingOut) {
+      const ok = await ensureResource(bot, smeltRaw, missingOut)
+      if (!ok) throw new Error(`impossible de récolter ${smeltRaw} (requis : ${missingOut}, obtenu : ${countItem(bot, smeltRaw)})`)
+    }
     await smeltItem(bot, smeltRaw, name, count)
     // smeltItem POST-VÉRIFIE désormais ; double contrôle de la production :
     if (countItem(bot, name) < count) throw new Error(`fonte de ${name} incomplète (${countItem(bot, name)}/${count})`)
@@ -825,7 +834,14 @@ async function craftItem (bot, name, count) {
       const ingNeed = (ing.count ?? 1) * crafts
       if (countOf(ingItem.name) < ingNeed) {
         missing = true
-        await craftItem(bot, ingItem.name, ingNeed) // fabrique l'ingrédient (récursion)
+        // ingrédient MINABLE (raw_iron, diamant, silex…) → récolte ciblée d'abord ;
+        // sinon fabrication récursive (planches, bâtons…)
+        if (GATHER_RULES[ingItem.name]) {
+          const ok = await ensureResource(bot, ingItem.name, ingNeed)
+          if (!ok) throw new Error(`récolte de ${ingItem.name} insuffisante (${countOf(ingItem.name)}/${ingNeed})`)
+        } else {
+          await craftItem(bot, ingItem.name, ingNeed) // fabrique l'ingrédient (récursion)
+        }
       }
     }
     if (missing) {
@@ -1434,6 +1450,52 @@ async function dropJunk (bot, keep = ['dirt', 'cobblestone', 'stone']) {
   return dropped
 }
 
+// ---------- Récolte ciblée intégrée au craft ----------
+// « Valider au fur et à mesure » : quand un ingrédient MINABLE manque, le bot
+// ne s'arrête plus sur « il manque 3x raw_iron » — il va le miner, le fondre,
+// puis continue la chaîne. Limité aux ressources de minage/récolte sûres et
+// rapides (les drops de mobs/structures restent gérés par les phases).
+const GATHER_RULES = {
+  raw_iron: { y: 16, ores: ['iron_ore', 'deepslate_iron_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 10 },
+  raw_gold: { y: 16, ores: ['gold_ore', 'deepslate_gold_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 10 },
+  raw_copper: { y: 48, ores: ['copper_ore', 'deepslate_copper_ore'], extra: ['coal_ore', 'deepslate_coal_ore'], maxMinutes: 8 },
+  diamond: { y: -58, ores: ['diamond_ore', 'deepslate_diamond_ore'], extra: ['coal_ore', 'deepslate_coal_ore', 'iron_ore', 'deepslate_iron_ore'], maxMinutes: 15 },
+  coal: { y: 32, ores: ['coal_ore', 'deepslate_coal_ore'], extra: [], maxMinutes: 8 },
+  flint: { gravel: true },
+  obsidian: { obsidian: true },
+  cobblestone: { stone: true },
+  stone: { stone: true }
+}
+
+// Amène l'inventaire à `count` de `name` via la récolte adaptée ; true si atteint.
+async function ensureResource (bot, name, count) {
+  const have = () => countItem(bot, name)
+  if (have() >= count) return true
+  const rule = GATHER_RULES[name]
+  if (!rule) return false
+  log('⛏️ il manque du ' + name + ' pour ce craft — je vais en chercher (' + (count - have()) + ')')
+  if (rule.gravel) {
+    await digGravelForFlint(bot, count)
+  } else if (rule.obsidian) {
+    await makeObsidian(bot, count)
+  } else if (rule.stone) {
+    await collectBlocks(bot, ['stone', 'cobblestone'], count, { maxDistance: 64, maxMinutes: 4 })
+  } else {
+    // descente seulement si on est bien au-dessus du filon (sinon on mine sur place)
+    if (rule.y < bot.entity.position.y - 8 && bot.game?.dimension === 'overworld') {
+      await digStaircase(bot, rule.y)
+    }
+    await branchMine(bot, {
+      y: rule.y,
+      need: () => have() >= count,
+      ores: rule.ores,
+      extraOres: rule.extra,
+      maxMinutes: rule.maxMinutes
+    })
+  }
+  return have() >= count
+}
+
 // Wrappers sûrs : sur un serveur qui lag (ou 26.1 avec PartialReadError), les
 // promesses mineflayer (activateBlock, placeBlock, equip…) peuvent pendre indéfiniment.
 // Ces wrappers ajoutent un timeout pour que la mission puisse reprendre.
@@ -1448,7 +1510,7 @@ module.exports = {
   Vec3, log, sleep, say, chat, proactive, announce, isItemDrop, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, watchBlockChanges, sortInventory, dropJunk, legit, rand, randInt, withTimeout, mcData, blockId, countItem, hasAnyItem, findEntities, equipName, digBlock,
   setMovements, goTo, walkDirect, GoalNear, GoalXZ, GoalY, GoalBlock, GoalFollow, explore, enterDimension,
   collectBlocks, collectNearbyItems, lootNearbyChests, lootSingleChest, isChestLooted,
-  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw,
+  ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw, GATHER_RULES, ensureResource,
   eatUntil, FOOD_NAMES,
   equipBestSword, equipShield, huntMob, shootWithBow,
   placeBlockFromInventory, findSolidNeighbor, pillarUp,

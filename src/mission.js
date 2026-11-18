@@ -7,7 +7,7 @@ const { log, say, chat, proactive, announce, sleep, goTo, GoalFollow, GoalNear, 
 
 // helpers locaux (évite un cycle d'import avec survie.js)
 const isNight = (bot) => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t <= 23000 }
-const MELEE_WEAPONS = ['wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword',
+const MELEE_WEAPONS = ['wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword',
   'wooden_axe', 'stone_axe', 'iron_axe', 'diamond_axe', 'mace', 'trident']
 // un seul parcours d'inventaire pour bow+arrow+toutes les armes de mêlée
 // (l'ancien hasWeapon faisait jusqu'à 11 countItem = 11 parcours complets)

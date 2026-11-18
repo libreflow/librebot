@@ -394,9 +394,11 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
   let lastErr = null
   for (let i = 0; i <= retries; i++) {
     if (bot._fleeing && !force) { log('🏃 fuite en cours — trajet annulé'); return false }
-    // 1er essai 20 s de calcul A* (12 s c'était trop court sur 60+ blocs avec obstacles),
-    // puis 30 s au 2ème essai
-    bot.pathfinder.thinkTimeout = Math.min(i === 0 ? 20000 : 30000, Math.max(5000, remaining()))
+    // court trajet (< 24 blocs) : pas besoin de 20 s de calcul A* — si la marche directe
+    // a échoué à quelques blocs, la cible est presque toujours infranchissable, on rend vite la main
+    const distNow = pt ? Math.hypot(pt.x - bot.entity.position.x, pt.z - bot.entity.position.z) : 32
+    const cap = distNow < 24 ? 8000 : (i === 0 ? 20000 : 30000)
+    bot.pathfinder.thinkTimeout = Math.min(cap, Math.max(5000, remaining()))
     // détection de blocage : si la position ne change plus, on force un recalcul du chemin
     let lastPos = bot.entity.position.clone()
     let lastMove = Date.now()
@@ -413,7 +415,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
       }
     }, 2000)
     try {
-      await withTimeout(bot.pathfinder.goto(goal), Math.min(20000, Math.max(5000, remaining())))
+      await withTimeout(bot.pathfinder.goto(goal), Math.min(cap, Math.max(5000, remaining())))
       clearInterval(watch); clearInterval(stuckKiller); clearInterval(speedTracker)
       return true
     } catch (err) {
@@ -1196,6 +1198,26 @@ async function placeBlockFromInventory (bot, name) {
       } catch (e) {}
     }
   }
+  // passe 3 (universelle, façon joueur bloqué) : sauter et poser le bloc sous ses pieds.
+  // Fonctionne partout où il y a du sol — même au fond d'une cave luxuriante
+  // obstruée de lianes qui font échouer la ligne de vue.
+  try {
+    const feet = bot.entity.position.floored()
+    const beneath = bot.blockAt(feet.offset(0, -1, 0))
+    if (isSolidBlock(beneath)) {
+      await equipName(bot, name, 'hand')
+      bot.setControlState('jump', true)
+      try {
+        await sleep(250)
+        await bot.placeBlock(beneath, new Vec3(0, 1, 0))
+      } finally {
+        bot.setControlState('jump', false)
+      }
+      await sleep(150)
+      const placed = bot.blockAt(feet)
+      if (placed && placed.name === name) return placed
+    }
+  } catch (e) {}
   throw new Error(`aucun emplacement pour poser ${name}`)
 }
 

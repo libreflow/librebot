@@ -333,6 +333,54 @@ function status (bot) {
   say(bot, '📊 Progression : ' + done.length + '/' + PHASES.length + ' phases (ateliers succès : ' + workshopsDone + '/6). Prochaine : ' + (next ? next.label : 'terminé !') + follow)
 }
 
+// ---------- Rattrapage adaptatif (catch-up) ----------
+// À la reprise d'une mission (« reprendre », redémarrage, items obtenus d'un
+// coffre/échange/don), INVENTAIRE et PROGRESSION prouvent que certaines phases
+// sont déjà « payées » : on les marque faites au lieu de re-récolter.
+// Contrats conservateurs (une phase n'est sautée que si ses PRODUITS clés sont
+// là) et évaluation MONOTONE dans l'ordre de la route : on s'arrête au premier
+// contrat non rempli pour ne jamais sauter des prérequis intermédiaires.
+function recoverPhasesFromInventory (bot, cfg, progress) {
+  const t = cfg.targets ?? {}
+  const n = (name) => countItem(bot, name)
+  const has = (name) => n(name) > 0
+  const pickAtLeast = (names) => names.some(has)
+  const minObsidian = cfg.rush ? 10 : 14
+  const powderEquivalents = n('blaze_powder') + n('blaze_rod') * 2
+  const contracts = [
+    // bois : une pioche = l'atelier bois/outils a forcément tourné
+    { key: 'bois', ok: pickAtLeast(['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe']) },
+    // pierre : pioche pierre+ ET de quoi faire le fourneau (sinon le four manque plus tard)
+    { key: 'pierre', ok: pickAtLeast(['stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe']) && (n('furnace') > 0 || n('cobblestone') + n('stone') >= 8) },
+    // fer : pioche fer+ ET de quoi faire briquet/seau (futurs prerequis du Nether)
+    { key: 'fer', ok: pickAtLeast(['iron_pickaxe', 'diamond_pickaxe']) && (has('flint_and_steel') || n('iron_ingot') >= 3 || has('bucket')) },
+    // diamant : pioche diamant OU les diamants demandés déjà minés
+    { key: 'diamant', ok: has('diamond_pickaxe') || n('diamond') >= (t.diamonds ?? 3) },
+    { key: 'obsidienne', ok: n('obsidian') >= minObsidian },
+    { key: 'base', ok: !!progress.home },
+    // nether : déjà de l'autre côté, ou portail déjà monté
+    { key: 'nether', ok: bot.game?.dimension === 'the_nether' || !!progress.netherPortal },
+    { key: 'forteresse', ok: !!progress.fortress },
+    // blazes : rods OU poudres déjà transformées (1 rod = 2 poudres)
+    { key: 'blazes', ok: n('blaze_rod') >= (t.blazeRods ?? 7) || powderEquivalents >= (t.blazeRods ?? 7) * 2 },
+    { key: 'perles', ok: n('ender_pearl') >= (t.enderPearls ?? 14) },
+    { key: 'yeux', ok: n('ender_eye') >= (t.enderEyes ?? 12) },
+    { key: 'stronghold', ok: !!progress.portalRoom }
+    // dragon : jamais sautée (le combat se rejoue)
+  ]
+  let skipped = 0
+  for (const c of contracts) {
+    if (!c.ok) break // monotone : on ne saute jamais "au milieu" d'une route
+    if (!progress.done.includes(c.key)) {
+      progress.done.push(c.key)
+      skipped++
+      log('⚡ Rattrapage : phase "' + c.key + '" déjà acquise (inventaire/progression) — je ne la refais pas')
+    }
+  }
+  if (skipped) say(bot, '⚡ Rattrapage intelligent : ' + skipped + ' phase(s) déjà acquise(s), je reprends plus loin')
+  return skipped
+}
+
 // ---------- Exécution de la mission ----------
 
 async function runMission (bot, cfg, { fromStart = false } = {}) {
@@ -347,6 +395,8 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
     // { done: [] } écrasait tout le fichier à la prochaine saveProgress.
     const progress = fromStart ? { ...loadProgress(), done: [] } : loadProgress()
     progress.done ??= []
+    // adaptatif : sauter les phases prouvées par l'inventaire/la progression
+    recoverPhasesFromInventory(bot, cfg, progress)
     // mode rush : seules les 13 phases de la mission dragon, pas les ateliers de succès
     const phases = cfg.rush ? PHASES.slice(0, 13) : PHASES
     for (const ph of phases) {
@@ -665,4 +715,4 @@ async function handleCommand (bot, cfg, from, message) {
   }
 }
 
-module.exports = { runMission, handleCommand, handleDeath, fleeDeathSpot, waitSafe, recoverStuff, loadProgress, saveProgress, stopAll, followUser, stopFollowing, status, state, PHASES, applyRushTargets }
+module.exports = { runMission, recoverPhasesFromInventory, handleCommand, handleDeath, fleeDeathSpot, waitSafe, recoverStuff, loadProgress, saveProgress, stopAll, followUser, stopFollowing, status, state, PHASES, applyRushTargets }

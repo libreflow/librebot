@@ -1099,6 +1099,35 @@ async function equipShield (bot) {
 }
 
 // Chasse un type de mob jusqu'à ce que la condition `until` soit vraie.
+
+// ---------- 111-113/125. Barattage avec les Piglins ----------
+// La méta RSG : jeter des lingots d'or près d'un piglin (non-brute) -> il ramasse,
+// bavarde ~6 s, puis jette son loot (perles de l'Ender, obsidienne, pelles/potions,
+// résistance au feu...). On ramasse tout après chaque tour.
+async function barterWithPiglins (bot, { until, maxMinutes = 6, maxIngots = 16 } = {}) {
+  const piglin = bot.nearestEntity((e) => e.name === 'piglin' && e.position.distanceTo(bot.entity.position) < 48)
+  if (!piglin) { log('ℹ️ Aucun piglin tranquille à portée — pas de barattage possible'); return false }
+  log('\U0001F4B0 Barattage piglin : j\'échange mon or contre vos butins !')
+  const t0 = Date.now()
+  let given = 0
+  while (Date.now() - t0 < maxMinutes * 60000 && given < maxIngots) {
+    if (until && until()) break
+    const gold = bot.inventory.items().find((i) => i.name === 'gold_ingot')
+    if (!gold) break
+    await goTo(bot, new GoalNear(piglin.position.x, piglin.position.y, piglin.position.z, 3), { timeout: 15000, retries: 0 }).catch(() => {})
+    try {
+      await bot.lookAt(piglin.position.offset(0, 1, 0))
+      await bot.tossStack(gold) // le lingot tombe devant le piglin -> il le ramasse
+      given++
+      await sleep(7500) // temps de barattage vanilla (~6 s)
+      await collectNearbyItems(bot, 10)
+    } catch (e) {}
+    await sleep(500)
+  }
+  log('💰 Barattage terminé : ' + given + ' lingot(s) échangés — ' + countItem(bot, 'ender_pearl') + ' perles, ' + countItem(bot, 'obsidian') + ' obsidienne')
+  return given > 0
+}
+
 async function huntMob (bot, mobNames, { until, maxMinutes = 8 } = {}) {
   const t0 = Date.now()
   while (!until()) {
@@ -1627,7 +1656,7 @@ module.exports = {
   collectBlocks, collectNearbyItems, lootNearbyChests, lootSingleChest, isChestLooted,
   ensureCraftingTable, ensureFurnace, craftItem, craftAnyPlanks, smeltItem, SMELT_MAP, bestSmeltRaw, GATHER_RULES, ensureResource, countBridgeBlocks, ensureBridgeBlocks,
   eatUntil, FOOD_NAMES,
-  equipBestSword, equipShield, huntMob, shootWithBow,
+  equipBestSword, equipShield, huntMob, shootWithBow, barterWithPiglins,
   placeBlockFromInventory, findSolidNeighbor, pillarUp,
   digStaircase, ascendTo, branchMine,
   getWaterBucket, makeObsidian, refillBucket, digGravelForFlint,

@@ -4,6 +4,7 @@
 // des monstres quand la vie est basse, lave/feu, noyade.
 // ============================================================
 const {
+  equipName,
   Vec3, log, say, chat, sleep, goTo, GoalNear, GoalXZ,
   countItem, hasAnyItem, eatUntil, equipShield, equipBestSword, shootWithBow, withTimeout, huntMob,
   placeBlockFromInventory, mcData, lootSingleChest, isChestLooted, dropJunk, sortInventory
@@ -308,6 +309,19 @@ function startSurvivalWatch (bot) {
           h++
         }
         if (h >= 5) {
+          // 76. MLG WATER BUCKET : poser l'eau juste avant l'atterrissage
+          // annule tous les dommages de chute (le reflexe pro)
+          const wb = bot.inventory.items().find((i) => i.name === 'water_bucket')
+          if (wb) {
+            try {
+              chat(bot, 'fall', {}, { force: true })
+              log('💧 MLG Water Bucket !')
+              await equipName(bot, 'water_bucket', 'hand')
+              await bot.lookAt(feet.offset(0, -3, 0))
+              await bot.activateItem()
+              return
+            } catch {}
+          }
           const solid = bot.inventory.items().find((i) =>
             ['cobblestone', 'dirt', 'netherrack', 'end_stone', 'stone', 'andesite', 'granite', 'diorite'].includes(i.name) || i.name.endsWith('_planks'))
           if (solid) {

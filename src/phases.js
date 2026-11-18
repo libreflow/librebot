@@ -7,7 +7,7 @@ const {
   equipBestSword, pillarUp, digBlock,
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
-  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock, ensureBridgeBlocks,
+  eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock, ensureBridgeBlocks, barterWithPiglins,
   digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests, logThrottle,
   digGravelForFlint, trackEyeOfEnder
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
@@ -181,6 +181,32 @@ async function phaseIron (bot, cfg, progress) {
     else say(bot, '⚠️ Pas de ficelle — je tenterai l\'arc plus tard (cristaux sans arc = risque)')
   }
   await craftItem(bot, 'torch', rush ? 8 : 32)
+  // 41-46. VILLAGE À PORTÉE ? Lits gratuits (= nuits sautées sans tuer de moutons)
+  // et bottes de foin (-> blé -> pain). Passage soft, 45 s max.
+  {
+    try {
+      const t0 = Date.now()
+      const bedIds = ['red_bed', 'white_bed', 'blue_bed', 'green_bed', 'yellow_bed', 'black_bed', 'orange_bed'].map((n) => md(bot).blocksByName[n]?.id).filter(Boolean)
+      const hayId = md(bot).blocksByName.hay_block?.id
+      if (!bot.inventory.items().some((i) => i.name.endsWith('_bed')) && bedIds.length) {
+        const bed = bot.findBlock({ matching: bedIds, maxDistance: 64 })
+        if (bed && Date.now() - t0 < 30000) {
+          say(bot, '🏘️ Village ! Je récupère un lit gratuit (nuit sautable)')
+          await goTo(bot, new GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { timeout: 20000, retries: 0 }).catch(() => {})
+          await digBlock(bot, bed, 6000)
+          if (Date.now() - t0 < 45000 && hayId) {
+            const hay = bot.findBlock({ matching: hayId, maxDistance: 48 })
+            if (hay) {
+              await goTo(bot, new GoalNear(hay.position.x, hay.position.y, hay.position.z, 2), { timeout: 15000, retries: 0 }).catch(() => {})
+              await digBlock(bot, hay, 6000)
+              if (countItem(bot, 'wheat') >= 9) await craftItem(bot, 'bread', Math.floor(Math.min(3, countItem(bot, 'wheat') / 3)))
+              say(bot, '🍞 Foin du village transformé en pain')
+            }
+          }
+        }
+      }
+    } catch (e) { logThrottle('village', 'village : ' + e.message, 8000) }
+  }
   const woolOf = () => bot.inventory.items().filter((i) => i.name.endsWith('_wool')).reduce((a, i) => a + i.count, 0)
   // 18. LIT (3 laines + 3 planches) : dormir SAUTE la nuit au lieu de la subir
   if (!bot.inventory.items().some((i) => i.name.endsWith('_bed')) && woolOf() < 3) {
@@ -405,6 +431,21 @@ async function phasePearls (bot, cfg, progress) {
   // repasser le portail vers l'overworld
   const portal = progress.netherPortal
   if (!portal) throw new Error('position du portail perdue')
+  // 111-113/125. BARATTAGE PIGLINS (on est encore au Nether ici) : échanger l'or
+  // contre des perles/obsidienne AVANT de retourner farmer les endermen — la
+  // technique méta RSG. Soft : sans or ou sans piglin, on passe.
+  {
+    const gold = countItem(bot, 'gold_ingot')
+    const pearlNeed = Math.max(0, cfg.targets.enderPearls - countItem(bot, 'ender_pearl'))
+    if (gold >= 4 && pearlNeed > 0 && (bot.game?.dimension ?? '').includes('nether')) {
+      try {
+        await equipBestSword(bot).catch?.(() => {})
+        const before = countItem(bot, 'ender_pearl')
+        await barterWithPiglins(bot, { until: () => countItem(bot, 'ender_pearl') >= cfg.targets.enderPearls, maxMinutes: 6, maxIngots: Math.min(gold, 12) })
+        if (countItem(bot, 'ender_pearl') > before) say(bot, '💰 +' + (countItem(bot, 'ender_pearl') - before) + ' perles via barattage piglin !')
+      } catch (e) { logThrottle('barter', 'barattage : ' + e.message, 8000) }
+    }
+  }
   const portalId = md(bot).blocksByName.nether_portal?.id
   // guard : matching undefined matcherait tous les blocs
   const spots = portalId ? bot.findBlocks({ matching: portalId, maxDistance: 128, count: 4 }) : []

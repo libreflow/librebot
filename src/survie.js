@@ -258,6 +258,11 @@ function startSurvivalWatch (bot) {
       }
       // tri de la hotbar (outils d'abord) de temps en temps
       if (Math.random() < 0.003) { try { await sortInventory(bot) } catch {} }
+      // cerveau : purger les points spatiaux obsolètes (minés, > 2 h) une fois par heure
+      if (!bot._pruneAt || Date.now() - bot._pruneAt > 3600000) {
+        bot._pruneAt = Date.now()
+        try { learn.pruneSpatial() } catch {}
+      }
 
       // 2. bouclier en off-hand dès qu'on en a un
       if (countItem(bot, 'shield') > 0) {

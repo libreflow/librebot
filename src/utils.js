@@ -1177,11 +1177,23 @@ async function branchMine (bot, { y, need, ores = [], extraOres = [], maxMinutes
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
   while (!need() && Date.now() - t0 < maxMinutes * 60000) {
     // ramasser les minerais visibles (rayon réduit : le scan complet est coûteux)
-    const spots = bot.findBlocks({ matching: oreIds, maxDistance: 48, count: 24 })
+    let spots = bot.findBlocks({ matching: oreIds, maxDistance: 48, count: 24 })
     // mémoriser les minerais vus pour y retourner directement
     for (const pos of spots.slice(0, 6)) {
       const b = bot.blockAt(pos)
       if (b && b.name.includes('ore')) learn.recordDiscovery(b.name, pos)
+    }
+    // cerveau : rien de visible -> interroger la MÉMOIRE des gisements déjà vus
+    // (runs précédents, miners repérés en creusant) avant de creuser à l'aveugle
+    if (!spots.length) {
+      const remembered = ores
+        .flatMap((n) => learn.getNearestDiscoveries(n, bot.entity.position, 2, 128))
+        .sort((a, b) => a.dist - b.dist)
+      if (remembered.length) {
+        log('🧠 mémoire : gisement ' + ores.join('/') + ' repéré à ' + Math.round(remembered[0].dist) + ' blocs — j\'y retourne')
+        await goTo(bot, new GoalNear(remembered[0].x, remembered[0].y, remembered[0].z, 3), { timeout: 90000, retries: 0 }).catch(() => {})
+        spots = bot.findBlocks({ matching: oreIds, maxDistance: 32, count: 24 })
+      }
     }
     let collected = false
     for (const pos of spots.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))) {

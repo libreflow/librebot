@@ -433,11 +433,18 @@ async function seekStronghold (bot, progress) {
       say(bot, `🎯 Triangulation : stronghold estimé en (${Math.round(inter[0])}, ${Math.round(inter[1])})`)
       progress.strongholdXZ = inter
       await goTo(bot, new GoalXZ(inter[0], inter[1]), { timeout: 300000, retries: 1 })
-      // confirmation par un 3ème lancer sur place
-      const confirm = await throwEye(bot)
-      if (Math.hypot(confirm.to[0] - confirm.from[0], confirm.to[1] - confirm.from[1]) < 30) {
-        say(bot, '📍 L\'œil retombe près de moi : le stronghold est juste en dessous !')
-        progress.strongholdXZ = [bot.entity.position.x, bot.entity.position.z]
+      // confirmation ITÉRATIVE : tant que l'œil vole loin, l'estimation était fausse —
+      // on suit sa trajectoire au lieu de figer une cible potentiellement à des centaines de blocs
+      for (let tries = 0; tries < 3; tries++) {
+        const confirm = await throwEye(bot)
+        const flight = Math.hypot(confirm.to[0] - confirm.from[0], confirm.to[1] - confirm.from[1])
+        if (flight < 30) {
+          say(bot, '📍 L\'œil retombe près de moi : le stronghold est juste en dessous !')
+          progress.strongholdXZ = [bot.entity.position.x, bot.entity.position.z]
+          return
+        }
+        progress.strongholdXZ = confirm.to
+        await goTo(bot, new GoalXZ(confirm.to[0], confirm.to[1]), { timeout: 300000, retries: 1 })
       }
       return
     }

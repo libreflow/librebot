@@ -8,7 +8,7 @@ const {
   goTo, GoalNear, GoalXZ, GoalY, GoalBlock, explore, enterDimension,
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem,
   eatUntil, huntMob, shootWithBow, placeBlockFromInventory, isSolidBlock, ensureBridgeBlocks,
-  digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests,
+  digStaircase, ascendTo, branchMine, getWaterBucket, makeObsidian, lootNearbyChests, logThrottle,
   digGravelForFlint, trackEyeOfEnder
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
 const { buildHouse, buildNetherPortal } = require('./build')
@@ -181,6 +181,31 @@ async function phaseIron (bot, cfg, progress) {
     else say(bot, '⚠️ Pas de ficelle — je tenterai l\'arc plus tard (cristaux sans arc = risque)')
   }
   await craftItem(bot, 'torch', rush ? 8 : 32)
+  const woolOf = () => bot.inventory.items().filter((i) => i.name.endsWith('_wool')).reduce((a, i) => a + i.count, 0)
+  // 18. LIT (3 laines + 3 planches) : dormir SAUTE la nuit au lieu de la subir
+  if (!bot.inventory.items().some((i) => i.name.endsWith('_bed')) && woolOf() < 3) {
+    say(bot, "🐑 3 laines pour un lit — chasse aux moutons express")
+    try {
+      await huntMob(bot, ['sheep'], { until: () => woolOf() >= 3, maxMinutes: rush ? 3 : 5 })
+    } catch (e) { say(bot, '⚠️ Moutons introvables — je passerai les nuits à l’abri') }
+  }
+  if (!bot.inventory.items().some((i) => i.name.endsWith('_bed')) && woolOf() >= 3) {
+    try {
+      const firstWool = bot.inventory.items().find((i) => i.name.endsWith('_wool') && i.count >= 1)
+      const bedName = firstWool.name.replace('_wool', '_bed')
+      await craftItem(bot, bedName, 1)
+      say(bot, '🛏️ Lit fabriqué — les nuits seront sautées instantanément')
+    } catch (e) { say(bot, '⚠️ Lit impossible : ' + e.message) }
+  }
+  // 20. COFFRES (8 planches) : stocker au lieu de jeter (le junk reste chez lui)
+  if (!rush) {
+    try {
+      await craftItem(bot, 'chest', 2)
+      say(bot, '📦 2 coffres fabriqués — mes ressources seront rangées à la base')
+    } catch (e) { logThrottle('chestcraft', 'coffres : ' + e.message, 8000) }
+    // 27. CISAILLES (2 lingots) : tonte des moutons + récolte rapide
+    try { await craftItem(bot, 'shears', 1) } catch (e) {}
+  }
   await eatUntil(bot, rush ? 12 : 18)
 }
 
@@ -257,6 +282,21 @@ async function phaseNether (bot, cfg, progress) {
   await ascendTo(bot, 68)
   const portalPos = await buildNetherPortal(bot)
   progress.netherPortal = [portalPos.x, portalPos.y, portalPos.z]
+  // 38. PIÈCE D'ARMURE EN OR : les piglins ne font plus fuir/attaquer si on en
+  // porte une — objectif soft (on entre même sans, la route évite les bastions)
+  try {
+    const hasGold = (bot.inventory.items().some((i) => i.name.startsWith('golden_') && (i.name.endsWith('_helmet') || i.name.endsWith('_chestplate') || i.name.endsWith('_leggings') || i.name.endsWith('_boots'))))
+    if (!hasGold) {
+      const goldTotal = countItem(bot, 'gold_ingot') + countItem(bot, 'raw_gold')
+      if (goldTotal >= 5) {
+        if (countItem(bot, 'gold_ingot') < 5) await smeltItem(bot, 'raw_gold', 'gold_ingot', 5 - countItem(bot, 'gold_ingot'))
+        if (countItem(bot, 'gold_ingot') >= 5) {
+          await craftItem(bot, 'golden_helmet', 1)
+          say(bot, '📡 Casque en or — les piglins me respecteront')
+        }
+      } else say(bot, 'ℹ️ Pas d\'or sous la main — j\'entre sans pièce d\'or (attention aux piglins)')
+    }
+  } catch (e) { logThrottle('goldarmor', 'armure or : ' + e.message, 8000) }
   // entrer dans le portail
   await goTo(bot, new GoalNear(portalPos.x, portalPos.y, portalPos.z, 0.5), { timeout: 30000, retries: 1 })
   const inNether = await enterDimension(bot, 'the_nether', 45000)
@@ -316,6 +356,27 @@ async function phaseFortress (bot, cfg, progress) {
   learn.recordDiscovery('fortress', fortress)
   // looter les coffres de la forteresse au passage
   try { await lootNearbyChests(bot, 48, 5) } catch {}
+  // 47-48. VERRUES DU NETHER : la farm de verrues pousse sur le soulsand de la
+  // forteresse (déjà repérée par la vision comme signature de structure) —
+  // objectif soft : utile pour les potions, jamais bloquant pour le run
+  try {
+    const wartId = md(bot).blocksByName.nether_wart?.id
+    if (wartId) {
+      const warts = bot.findBlocks({ matching: wartId, maxDistance: 48, count: 8 })
+      if (warts.length) {
+        say(bot, '🌱 Verrues du Nether repérées ' + warts.length + ' — je les récolte (futur jardin de potions)')
+        for (const w of warts.slice(0, 6)) {
+          const b = bot.blockAt(w)
+          if (!b || b.name !== 'nether_wart') continue
+          try {
+            await goTo(bot, new GoalNear(w.x, w.y, w.z, 2), { timeout: 15000, retries: 0 }).catch(() => {})
+            await digBlock(bot, b, 3000)
+          } catch {}
+        }
+        if (countItem(bot, 'nether_wart') > 0) say(bot, '✅ ' + countItem(bot, 'nether_wart') + ' verrue(s) du Nether récoltée(s)')
+      }
+    }
+  } catch (e) { logThrottle('wart', 'verrues : ' + e.message, 8000) }
 }
 
 // ---------- Phase 9 : chasse aux blazes ----------
@@ -553,6 +614,35 @@ async function activateEndPortal (bot) {
   const frameId = md(bot).blocksByName.end_portal_frame?.id
   const portalId = md(bot).blocksByName.end_portal?.id
   if (!frameId || !portalId) throw new Error('blocs du portail de l\'End inconnus pour cette version')
+  // 70-71. SILVERFISH : la salle du portail possède un GÉNÉRATEUR de silverfish
+  // dans le sol/pilier — on le détruit AVANT de poser les yeux, et on nettoie
+  // les silverfish déjà lâchés (sinon ils peuvent perturber l'activation)
+  try {
+    const spawnerId = md(bot).blocksByName.spawner?.id
+    if (spawnerId) {
+      const spawners = bot.findBlocks({ matching: spawnerId, maxDistance: 24, count: 4 })
+      for (const sp of spawners) {
+        const b = bot.blockAt(sp)
+        if (!b) continue
+        try {
+          await goTo(bot, new GoalNear(sp.x, sp.y, sp.z, 2), { timeout: 15000, retries: 0 }).catch(() => {})
+          await digBlock(bot, b, 5000)
+          say(bot, '⚙️ Générateur de silverfish détruit (' + sp.x + ',' + sp.y + ',' + sp.z + ')')
+        } catch {}
+      }
+    }
+    // nettoyer les silverfish vivants autour de la salle avant activation
+    for (let k = 0; k < 6; k++) {
+      const fs = bot.nearestEntity((e) => e.name === 'silverfish' && e.position.distanceTo(bot.entity.position) < 12)
+      if (!fs) break
+      try {
+        await equipBestSword(bot)
+        await bot.lookAt(fs.position.offset(0, 0.3, 0))
+        for (let hit = 0; hit < 5 && fs.isValid; hit++) { bot.attack(fs); await sleep(400) }
+      } catch {}
+      await sleep(500)
+    }
+  } catch (e) { logThrottle('silverfish', 'nettoyage silverfish : ' + e.message, 8000) }
   for (let attempt = 0; attempt < 4; attempt++) {
     const frames = bot.findBlocks({ matching: frameId, maxDistance: 32, count: 16 })
       .map((p) => bot.blockAt(p))

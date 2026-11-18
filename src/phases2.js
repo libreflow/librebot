@@ -11,6 +11,7 @@ const {
   huntMob, equipBestSword, shootWithBow, placeBlockFromInventory, findSolidNeighbor,
   digStaircase, ascendTo, makeObsidian
 , actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, isSolidBlock } = require('./utils')
+const U = require('./utils') // accès complet (countItem, craftItem, equipBestSword…) pour l'acte II
 const { buildHouse, buildNetherPortal, placePlan } = require('./build')
 const S = require('./skills')
 const { record, saveProgress } = require('./advancements')
@@ -581,7 +582,45 @@ function wEndAgain () {
             while (Date.now() - t0 < 10 * 60000) {
               const purpurId = md2.blocksByName.purpur_block?.id
               const city = bot.findBlocks({ matching: purpurId, maxDistance: 96, count: 2 })
-              if (city.length) { record(bot, ['city'], 'ok'); break }
+              if (city.length) {
+                record(bot, ['city'], 'ok')
+                // 92-93. BATEAU DE L'END : châssis d'item frame contenant l'ÉLYTRE —
+                // les frames près de la cité signalent le bateau ; on les casse
+                try {
+                  const frames = bot.findEntities({ entityName: 'item_frame', maxDistance: 96 })?.filter?.((e) => e) ?? []
+                  const byEntity = frames.length ? frames : (Object.values(bot.entities).filter((e) => e.name === 'item_frame' && e.position?.distanceTo(bot.entity.position) < 160))
+                  for (const fr of byEntity.slice(0, 4)) {
+                    try {
+                      await goTo(bot, new GoalNear(fr.position.x, fr.position.y, fr.position.z, 3), { timeout: 20000, retries: 0 }).catch(() => {})
+                      for (let k = 0; k < 3 && fr.isValid !== false; k++) { try { bot.attack(fr) } catch {}; await sleep(500) }
+                    } catch {}
+                  }
+                  await sleep(1500) // laisser les drops tomber
+                  if (U.countItem(bot, 'elytra') > 0) { record(bot, ['elytra'], 'ok'); log('🪸 ÉLYTRE récupéré !') }
+                  else log('ℹ️ Bateau/elytra introuvable près de cette cité')
+                } catch (e) {}
+                // 94-95. SHULKERS : les tuer → carapaces → boîte de shulker (stockage)
+                try {
+                  let shells = U.countItem(bot, 'shulker_shell')
+                  if (shells < 2) {
+                    for (let k = 0; k < 3 && shells < 2; k++) {
+                      const sk = bot.nearestEntity((e) => e.name === 'shulker' && e.position.distanceTo(bot.entity.position) < 24)
+                      if (!sk) break
+                      await goTo(bot, new GoalNear(sk.position.x, sk.position.y, sk.position.z, 4), { timeout: 20000, retries: 0 }).catch(() => {})
+                      await U.equipBestSword(bot).catch?.(() => {})
+                      for (let hit = 0; hit < 12 && sk.isValid; hit++) { try { bot.attack(sk) } catch {}; await sleep(600) }
+                      await sleep(2000)
+                      shells = U.countItem(bot, 'shulker_shell')
+                    }
+                  }
+                  if (U.countItem(bot, 'shulker_shell') >= 2 && U.countItem(bot, 'chest') > 0) {
+                    await U.craftItem(bot, 'shulker_box', 1)
+                    record(bot, ['shulker_box'], 'ok')
+                    log('🧪 Boîte de shulker fabriquée !')
+                  }
+                } catch (e) {}
+                break
+              }
               const shulker = bot.nearestEntity((e) => e.name === 'shulker')
               if (shulker) {
                 // se faire toucher par un shulker et flotter

@@ -10,7 +10,7 @@ const {
   collectBlocks, collectNearbyItems, craftItem, craftAnyPlanks, smeltItem, eatUntil,
   huntMob, equipBestSword, shootWithBow, placeBlockFromInventory, findSolidNeighbor,
   digStaircase, ascendTo, makeObsidian
-, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe } = require('./utils')
+, actBlock, actItem, deactItem, placeSafe, equipSafe, lookSafe, isSolidBlock } = require('./utils')
 const { buildHouse, buildNetherPortal, placePlan } = require('./build')
 const S = require('./skills')
 const { record, saveProgress } = require('./advancements')
@@ -189,7 +189,7 @@ async function findGroundBelow (bot) {
   // 150 blocs max : au-delà c'est le vide absolu, on retourne 0 de toute façon
   for (let dy = -1; dy > -150; dy--) {
     const b = bot.blockAt(feet.offset(0, dy, 0))
-    if (b && b.boundingBox === 'solid') return feet.y + dy + 1
+    if (isSolidBlock(b)) return feet.y + dy + 1
   }
   return 0
 }

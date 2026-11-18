@@ -212,10 +212,14 @@ function createBot () {
           try {
             const idle = Date.now() - require('./chat').getLastLogAt()
             if (idle > 150000) {
-              console.log('[' + new Date().toISOString().slice(11, 19) + '] 🚨 WATCHDOG: inactif depuis ' + Math.round(idle / 1000) + 's — déblocage forcé')
               try { bot.pathfinder.stop() } catch {}
               try { bot.pvp.stop() } catch {}
               try { bot.clearControlStates() } catch {}
+              // un avertissement max tous les 150 s (avant : spam toutes les 20 s quand la mission était bloquée)
+              if (!bot._lastIdleWarn || Date.now() - bot._lastIdleWarn > 150000) {
+                bot._lastIdleWarn = Date.now()
+                console.log('[' + new Date().toISOString().slice(11, 19) + '] 🚨 WATCHDOG: inactif depuis ' + Math.round(idle / 1000) + 's — déblocage forcé')
+              }
               for (const s of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) { try { bot.setControlState(s, false) } catch {} }
               if (idle > 300000 && state.running) {
                 console.log('[' + new Date().toISOString().slice(11, 19) + '] 🚨 WATCHDOG: mission bloquée depuis > 5 min — relance')

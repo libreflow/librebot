@@ -17,6 +17,9 @@
 // ============================================================
 const { Vec3 } = require('vec3')
 
+// bloc solide plein : prismarine-block renvoie 'block' (jamais 'solid')
+const isSolidBlock = (b) => !!b && (b.boundingBox === 'block' || b.boundingBox === 'solid')
+
 const VOID_BLOCKS = new Set(['air', 'cave_air', 'void_air'])
 // gravité vanilla : 0.08 bloc/tick², vitesse terminale de chute -3.92 blocs/tick
 const GRAVITY = 0.08
@@ -89,11 +92,11 @@ function installPhysics (bot, versionAtLeast, log = () => {}) {
       e.velocity.y = Math.max((e.velocity?.y ?? 0) - GRAVITY, TERMINAL_VELOCITY)
       const nextY = e.position.y + e.velocity.y
       const ground = bot.blockAt(new Vec3(e.position.x, Math.floor(nextY), e.position.z))
-      if (ground && ground.boundingBox === 'solid') {
+      if (isSolidBlock(ground)) {
         // pas de pénétration dans le sol : on remonte au sommet du premier
         // bloc solide (le pas de chute peut faire plus d'un bloc à vitesse terminale)
         let gy = Math.floor(nextY)
-        while (gy < 320 && bot.blockAt(new Vec3(e.position.x, gy, e.position.z))?.boundingBox === 'solid') gy++
+        while (gy < 320 && isSolidBlock(bot.blockAt(new Vec3(e.position.x, gy, e.position.z)))) gy++
         e.position.y = gy
         e.velocity.y = 0
         e.onGround = true

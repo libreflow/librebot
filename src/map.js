@@ -158,7 +158,18 @@ function stats () {
   return { chunks, pois, paths, dangerZones: dangers, home: map.home, spawn: map.spawn }
 }
 
+
+// Nouveau monde : tout ce qui est coordonnées n'a plus de sens
+function clearWorld () {
+  map.chunks = {}
+  map.pois = []
+  map.paths = {}
+  map.home = null
+  map.spawn = null
+  save()
+}
 module.exports = {
+  clearWorld,
   visitChunk, markDanger, markResource, chunkDanger,
   addPOI, nearestPOI, poisInRadius,
   recordPath, pathReliability, isSafeChunk,

@@ -149,6 +149,27 @@ async function createBot () {
     // connexion LAN réussie : on mémorise le port qui marche (les prochaines
     // reconnexions l'utilisent direct, sans re-découverte de 6 s)
     if (_curTgt?.lan !== false) { _lanPortOk = _curTgt.port; _lanRefused = false }
+    // NOUVEAU MONDE ? Empreinte = position du spawn du monde. Si elle change, la
+    // progression sauvegardée (phases, portails, forteresse, base) vient d'un autre
+    // monde — on repart de la phase 1 au lieu de croire que tout est déjà fait.
+    if (!bot._worldChecked) {
+      bot._worldChecked = true
+      try {
+        const sp = bot.spawn_point
+        if (sp) {
+          const fp = Math.round(sp.x) + ',' + Math.round(sp.y) + ',' + Math.round(sp.z)
+          const p = loadProgress()
+          if (p.worldId && p.worldId !== fp) {
+            log('🌍 Nouveau monde détecté (spawn ' + fp + ' != ' + p.worldId + ') — progression réinitialisée, retour à la phase 1')
+            for (const k of ['done', 'deathPos', 'fortress', 'strongholdXZ', 'netherPortal', 'endPortal', 'portalRoom', 'home', 'confirm']) delete p[k]
+            p.worldId = fp
+            saveProgress(p)
+            try { require('./learn').resetWorldMemory() } catch (e) { log('reset learn: ' + e.message) }
+            try { require('./map').clearWorld() } catch (e) { log('reset map: ' + e.message) }
+          } else if (!p.worldId) { p.worldId = fp; saveProgress(p) }
+        }
+      } catch (e) { log('reset monde : ' + e.message) }
+    }
     bot._spawnedOnce = true
     log(`✅ Connecté ! (version serveur détectée : ${bot.version})`)
     if (!protocolPatched) {

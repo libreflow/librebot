@@ -491,6 +491,18 @@ function pruneSpatial (maxAgeMs = 2 * 3600 * 1000) {
   save()
 }
 
+
+// Nouveau monde : la mémoire SPATIALE et les stats de morts/liée au monde
+// précédent n'ont plus aucun sens (coords différentes) — on repart à zé,
+// mais on garde l'apprentissage général (phases, skills, épisodes, qtable).
+function resetWorldMemory () {
+  data.spatialMap = {}
+  data.explore = {}
+  data.exploreAnchor = null
+  data.discoveries = {}
+  data.deaths = []
+  data.flees = []
+}
 module.exports = {
   getNearestDiscoveries,
   recordPhaseSuccess, recordPhaseFailure, phaseStrategy, phaseReliability,
@@ -500,6 +512,7 @@ module.exports = {
   recordSkill, skillLevel,
   adjustTargets, summary,
   recordEpisode, completeEpisode, getQBonus, getSimilarEpisodes, bestActionInSimilarSituations, stateKey,
+  resetWorldMemory,
   recordSpatial, nearestSpatial, spatialInRadius, bestResourceNear, nearestDangerSpatial, knownResources, pruneSpatial,
   recordSpeedrunResult, getSpeedrunStats, getSpeedrunBaseline
 }

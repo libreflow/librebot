@@ -140,9 +140,21 @@ async function phaseIron (bot, cfg, progress) {
   }
   // SPEEDRUN : 1 seul seau (on le reremplit à l'eau après l'obsidienne), flèches/torches réduites
   await craftItem(bot, 'bucket', rush ? 1 : 2)
-  await digGravelForFlint(bot, rush ? 2 : 10)
+  const arrows = rush ? 8 : 32
+  const arrowCrafts = Math.ceil(arrows / 4) // 1 flint + 1 plume + 1 bâton = 4 flèches
+  // plumes : en rush la chasse aux poules de la phase 1 est sautée — sans ça,
+  // craftItem('arrow') throw systématiquement (« feather ne se craft pas »)
+  if (countItem(bot, 'feather') < arrowCrafts) {
+    say(bot, '🏹 Il me faut ' + arrowCrafts + ' plume(s) pour les flèches — chasse aux poules express')
+    await huntMob(bot, ['chicken'], {
+      until: () => countItem(bot, 'feather') >= arrowCrafts,
+      maxMinutes: rush ? 3 : 6
+    })
+    if (countItem(bot, 'feather') < arrowCrafts) say(bot, '⚠️ Pas assez de plumes — je tenterai les flèches avec ce qu\'il y a')
+  }
+  await digGravelForFlint(bot, Math.max(arrowCrafts + 1 - countItem(bot, 'flint'), 0)) // +1 pour le briquet
   await craftItem(bot, 'flint_and_steel', 1)
-  await craftItem(bot, 'arrow', rush ? 8 : 32) // silex + bâton + plume
+  if (countItem(bot, 'feather') >= arrowCrafts) await craftItem(bot, 'arrow', arrows) // silex + bâton + plume
   await craftItem(bot, 'torch', rush ? 8 : 32)
   await eatUntil(bot, rush ? 12 : 18)
 }
@@ -295,6 +307,7 @@ async function phasePearls (bot, cfg, progress) {
   if (cfg.rush) {
     const t0 = Date.now()
     let hid = false
+    const surfaceY = Math.floor(bot.entity.position.y) // pour ressortir du trou ensuite
     while (!isNightLocal(bot) && Date.now() - t0 < 4 * 60000) {
       if (!hid) {
         hid = true
@@ -310,6 +323,24 @@ async function phasePearls (bot, cfg, progress) {
       }
       await sleep(5000)
       if (nearestHostileLocal(bot, 8)) break // un mob entre : on sort chasser quand même
+    }
+    // ressortir du trou : sans ça le bot restait coincé 2 blocs sous terre et
+    // chassait les endermen sans les atteindre
+    if (bot.entity.position.y < surfaceY - 0.5) {
+      const climb = countItem(bot, 'cobblestone') > 0 ? 'cobblestone' : (countItem(bot, 'dirt') > 0 ? 'dirt' : null)
+      if (climb) {
+        try { await pillarUp(bot, surfaceY + 1, climb) } catch (e) { log('⚠️ ressortie du trou ratée : ' + e.message) }
+      } else {
+        // pas de blocs : creuser un escalier de secours vers le haut
+        for (let dy = 0; dy < 4 && bot.entity.position.y < surfaceY; dy++) {
+          try {
+            const { digBlock } = require('./utils')
+            const p2 = bot.entity.position.floored().offset(0, 1, 0)
+            const blk = bot.blockAt(p2)
+            if (blk && isSolidBlock(blk) && blk.name !== 'bedrock') await digBlock(bot, blk, 4000).catch(() => {})
+          } catch {}
+        }
+      }
     }
   }
   const ok = await huntMob(bot, ['enderman'], {

@@ -919,7 +919,13 @@ const FUEL_NAMES = new Set(['coal', 'charcoal', 'oak_planks', 'spruce_planks', '
 async function eatUntil (bot, target = 18) {
   let safety = 0
   while (bot.food < target && safety++ < 10) {
-    const food = bot.inventory.items().find((i) => FOOD_NAMES_SET.has(i.name))
+    // manger par PRIORITÉ (cuite avant crue, dorée/pain avant viande crue) :
+    // avant, c'était le premier item de l'inventaire → poulet cru et risque de poison
+    let food = null
+    for (const fname of FOOD_NAMES) {
+      const it = bot.inventory.items().find((i) => i.name === fname)
+      if (it && countItem(bot, fname) > 0) { food = it; break }
+    }
     if (!food) return false
     await bot.equip(food, 'hand')
     await sleep(150)

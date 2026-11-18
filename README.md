@@ -52,6 +52,8 @@ le plus vite possible :
 - **phase 6** : pas de maison construite
 - **fin** : seules les 13 phases de la mission tournent (les 6 ateliers de succès sont sautés)
 
+En mode rush, dis **« baseline »** au bot : il agrège les splits et les morts de tes 30 derniers runs (persistés dans `learning.json`) et liste les phases les plus lentes en premier — moyen direct d'identifier le goulot avant d'optimiser.
+
 ## 👁️ Regarder le bot jouer
 
 Le dashboard affiche aussi les **40 dernières lignes du log en direct** (`/api/logs`), la **cible de connexion courante** (LAN/Aternos + fallback), le **streak de morts** et la version du serveur (`/api/state`).

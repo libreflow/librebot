@@ -22,9 +22,15 @@ function fmt (ms) {
 function isRunning () { return !!run }
 
 function startRun (log) {
-  run = { startMs: Date.now(), splits: {}, done: 0 }
+  run = { startMs: Date.now(), splits: {}, order: [], deaths: 0, deathsByPhase: {}, phase: null }
   if (log) log('⏱️ SPEEDRUN lancé — any% legit, objectif : le dragon le plus vite possible !')
   return run
+}
+
+// Phase en cours (pour attribuer les morts à la bonne phase)
+function setPhase (phaseKey) {
+  if (!run) return
+  run.phase = phaseKey
 }
 
 // Enregistre le split d'une phase qui vient de se terminer
@@ -32,6 +38,7 @@ function split (phaseKey, label, log) {
   if (!run) return null
   const elapsed = Date.now() - run.startMs
   run.splits[phaseKey] = elapsed
+  if (!run.order.includes(phaseKey)) run.order.push(phaseKey)
   run.done++
   if (log) log(`⏱️ split ${label} : ${fmt(elapsed)} (total ${run.done} phases)`)
   return elapsed
@@ -41,12 +48,15 @@ function split (phaseKey, label, log) {
 function finish (won, log) {
   if (!run) return null
   const totalMs = Date.now() - run.startMs
-  const stats = learn.recordSpeedrunResult(won, totalMs, run.splits)
+  const phaseDeltas = {}
+  let prev = 0
+  for (const k of run.order) { phaseDeltas[k] = (run.splits[k] ?? 0) - prev; prev = run.splits[k] ?? prev }
+  const stats = learn.recordSpeedrunResult(won, totalMs, run.splits, { phaseDeltas, deaths: run.deaths, deathsByPhase: run.deathsByPhase, order: run.order })
   if (log) {
-    log(`⏱️ Run terminé en ${fmt(totalMs)} — ${won ? '🏆 VICTOIRE (dragon tué)' : '❌ run interrompu'}`)
+    log(`⏱️ Run terminé en ${fmt(totalMs)} — ${won ? '🏆 VICTOIRE (dragon tué)' : '❌ run interrompu'} (` + run.order.map((k) => `${k}:${fmt(phaseDeltas[k])}`).join(' ') + `)`)
     if (stats.bestMs) log(`⏱️ Meilleur run : ${fmt(stats.bestMs)} (${stats.wins}/${stats.attempts} victoires)`)
   }
-  const res = { totalMs, splits: run.splits, stats }
+  const res = { totalMs, splits: run.splits, phaseDeltas, deaths: run.deaths, deathsByPhase: run.deathsByPhase, stats }
   run = null
   return res
 }
@@ -54,7 +64,25 @@ function finish (won, log) {
 // Redémarre le chrono si le bot meurt (en speedrun, chaque mort = restart du split courant)
 function noteDeath (log) {
   if (!run) return
-  if (log) log('☠️ Mort pendant le speedrun — le chrono continue (les splits restent valides)')
+  run.deaths++
+  const ph = run.phase ?? '?'
+  run.deathsByPhase[ph] = (run.deathsByPhase[ph] ?? 0) + 1
+  if (log) log(`☠️ Mort pendant le speedrun (phase ${ph}) — le chrono continue (les splits restent valides)`)
+}
+
+// Baseline agrégée multi-runs : durée moyenne par phase + morts par phase
+function baseline () {
+  return learn.getSpeedrunBaseline()
+}
+
+function describeBaseline () {
+  const b = baseline()
+  if (!b.runs) return 'Pas encore assez de runs pour une baseline. Lance plusieurs runs rush !'
+  const lines = [`${b.runs} run(s), ${b.wins} victoire(s)`]
+  for (const row of b.phases) {
+    lines.push(`${row.phase}: ${fmt(row.avgDelta)} moyen (${fmt(row.minDelta)}–${fmt(row.maxDelta)}), ${row.deaths} mort(s)`)
+  }
+  return lines.join(' | ')
 }
 
 // Rapport textuel pour le chat / dashboard
@@ -73,4 +101,4 @@ function describe () {
   return lines.join(' | ')
 }
 
-module.exports = { startRun, split, finish, noteDeath, status, describe, fmt, isRunning }
+module.exports = { startRun, setPhase, split, finish, noteDeath, status, describe, baseline, describeBaseline, fmt, isRunning }

@@ -358,7 +358,7 @@ function bestActionInSimilarSituations (state) {
 // ---------- Speedrun (any% legit) ----------
 
 // Enregistre le résultat d'un run : win = dragon tué. Garde le meilleur chrono + ses splits.
-function recordSpeedrunResult (won, totalMs, splits) {
+function recordSpeedrunResult (won, totalMs, splits, extra = {}) {
   const s = (data.speedrun ??= { attempts: 0, wins: 0, bestMs: null, bestSplits: null, lastMs: null })
   s.attempts++
   if (won) s.wins++
@@ -367,8 +367,37 @@ function recordSpeedrunResult (won, totalMs, splits) {
     s.bestMs = totalMs
     s.bestSplits = splits
   }
+  // Historique des runs (pour la baseline multi-runs), plafonné à 30
+  s.history ??= []
+  s.history.push({ t: Date.now(), won, totalMs, splits, phaseDeltas: extra.phaseDeltas ?? {}, deaths: extra.deaths ?? 0, deathsByPhase: extra.deathsByPhase ?? {}, order: extra.order ?? [] })
+  if (s.history.length > 30) s.history = s.history.slice(-30)
   save()
   return s
+}
+
+// Baseline multi-runs : durée moyenne/min/max par phase + morts par phase
+function getSpeedrunBaseline () {
+  const s = data.speedrun ?? {}
+  const history = s.history ?? []
+  const phases = {}
+  const deathsByPhase = {}
+  for (const r of history) {
+    for (const k of Object.keys(r.phaseDeltas ?? {})) {
+      (phases[k] ??= []).push(r.phaseDeltas[k])
+    }
+    for (const [k, n] of Object.entries(r.deathsByPhase ?? {})) {
+      deathsByPhase[k] = (deathsByPhase[k] ?? 0) + n
+    }
+  }
+  const rows = Object.entries(phases).map(([phase, deltas]) => ({
+    phase,
+    n: deltas.length,
+    avgDelta: deltas.reduce((a, b) => a + b, 0) / deltas.length,
+    minDelta: Math.min(...deltas),
+    maxDelta: Math.max(...deltas),
+    deaths: deathsByPhase[phase] ?? 0
+  })).sort((a, b) => b.avgDelta - a.avgDelta) // goulot d'abord
+  return { runs: history.length, wins: history.filter((r) => r.won).length, phases: rows, deathsByPhase }
 }
 
 function getSpeedrunStats () {
@@ -466,5 +495,5 @@ module.exports = {
   adjustTargets, summary,
   recordEpisode, completeEpisode, getQBonus, getSimilarEpisodes, bestActionInSimilarSituations, stateKey,
   recordSpatial, nearestSpatial, spatialInRadius, bestResourceNear, nearestDangerSpatial, knownResources, pruneSpatial,
-  recordSpeedrunResult, getSpeedrunStats
+  recordSpeedrunResult, getSpeedrunStats, getSpeedrunBaseline
 }

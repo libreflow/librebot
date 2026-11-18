@@ -35,6 +35,12 @@ if (!data.exploreAnchor) data.exploreAnchor = null
 if (!data.explore) data.explore = { angle: 0, radius: 24 }
 if (!data.spatialMap) data.spatialMap = {}
 if (!data.speedrun) data.speedrun = { attempts: 0, wins: 0, bestMs: null, bestSplits: null, lastMs: null }
+if (!Array.isArray(data.deaths)) data.deaths = []
+if (!Array.isArray(data.flees)) data.flees = []
+if (!Array.isArray(data.episodes)) data.episodes = []
+if (!data.discoveries) data.discoveries = {}
+if (!data.skills) data.skills = {}
+if (!data.phases) data.phases = {}
 
 // Debounce : chaque record*() appelle save() mais on n'écrit sur disque que
 // toutes les 3 s (ou à la fermeture). Évite des dizaines de writeFileSync

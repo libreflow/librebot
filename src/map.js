@@ -15,6 +15,11 @@ const MAP_PATH = path.join(__dirname, '..', 'worldmap.json')
 
 let map = loadMap()
 
+// Migration : un worldmap.json ancien/vide ne doit jamais crasher
+if (!Array.isArray(map.pois)) map.pois = []
+if (!map.paths) map.paths = {}
+if (!map.chunks) map.chunks = {}
+
 function loadMap () {
   try { return JSON.parse(fs.readFileSync(MAP_PATH, 'utf8')) } catch {}
   return {

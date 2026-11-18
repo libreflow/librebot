@@ -307,7 +307,21 @@ function goTo (bot, goal, opts = {}) {
   const run = _moveChain.then(async () => {
     _moveAbort = false
     if (opts.force) { try { bot.pathfinder.stop() } catch {} }
-    return await _goTo(bot, goal, opts)
+    const res = await _goTo(bot, goal, opts)
+    // cerveau : mémoriser la fiabilité du trajet (de A vers B réussi ou raté) —
+    // sert à logger les chemins peu fiables et à adapter les efforts futurs
+    try {
+      const from = bot.entity?.position?.floored()
+      const t = goalPoint(bot, goal)
+      if (from && t) {
+        map.recordPath(from.x, from.z, t.x, t.z, res === true)
+        const rel = map.pathReliability(from.x, from.z, t.x, t.z)
+        if (res !== true && rel !== null && rel < 0.3) {
+          logThrottle('pathmem', '🧠 trajet vers (' + Math.round(t.x) + ', ' + Math.round(t.z) + ') peu fiable (' + Math.round(rel * 100) + '% de réussite) — mémorisé', 30000)
+        }
+      }
+    } catch {}
+    return res
   })
   _moveChain = run.catch(() => {})
   return run

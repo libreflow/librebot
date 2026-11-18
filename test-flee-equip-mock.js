@@ -57,7 +57,7 @@ check(survie.isWellEquipped(bot({ inv: invGood, food: 5 })) === false, 'isWellEq
 
 // 7. code : reactDamage ne fuit plus à 16 pv si bien équipé (hp<=8 reste vital)
 const src = fs.readFileSync('./src/survie.js', 'utf8')
-check(src.includes('hp <= 8 || !isWellEquipped(bot)'), 'reactDamage: fuite seulement si hp<=8 OU mal équipé')
+check(src.includes('hp <= fleeThreshold || !isWellEquipped(bot)'), 'reactDamage: fuite seulement si hp<=seuil APPRIS OU mal équipé')
 
 console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
 process.exit(fails === 0 ? 0 : 1)

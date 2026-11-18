@@ -80,6 +80,8 @@ function handleDeath (bot) {
   saveProgress(p)
   const cause = cause0
   learn.recordDeath(cause, bot)
+  // mémoire spatiale : le lieu de la mort devient une zone DANGER connue du cerveau
+  if (bot?.entity?.position) learn.recordSpatial('danger:death', bot.entity.position.floored(), 10)
   speedrun.noteDeath(log) // le chrono speedrun continue malgré la mort
   chat(bot, 'death', { cause }, { force: true })
   log('☠️ Mort détectée (cause apprise : ' + cause + ') : progression remise à zéro (coordonnées conservées)' + (state.deathStreak >= 2 ? ' — STREAK x' + state.deathStreak + ', mode panique au respawn' : ''))
@@ -560,7 +562,9 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
       '📊 Dis "succès" pour le bilan complet des succès.'
     ])
     say(bot, '🏆 MISSION ACCOMPLIE : le dragon est mort et les ateliers de succès sont passés !')
-    if (cfg.rush) speedrun.finish(true, log) // 🏆 victoire speedrun : persiste le meilleur chrono
+    if (cfg.rush) speedrun.finish(true, log)
+    // cerveau : ferme autonome post-mission (récolte périodique des cultures posées)
+    try { require('./autofarm').startAutoFarm(bot) } catch (e) { log('autofarm: ' + e.message) } // 🏆 victoire speedrun : persiste le meilleur chrono
   } catch (err) {
     log(`erreur mission : ${err.stack}`)
     say(bot, `💥 Erreur inattendue : ${err.message}`)

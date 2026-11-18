@@ -121,22 +121,32 @@ async function equipName (bot, name, dest = 'hand') {
 // ---------- Déplacements ----------
 
 function setMovements (bot) {
-  // cache : recréer un Movements à chaque appel est inutile et coûteux
-  if (bot._librebotMovements) {
-    bot.pathfinder.setMovements(bot._librebotMovements)
-    if (bot.collectBlock) bot.collectBlock.movements = bot._librebotMovements
-    return
+  // cache PAR DIMENSION : les garde-fous du Nether ne doivent pas s'appliquer
+  // à l'overworld (et réciproquement). Avant, un seul objet Movements servait partout,
+  // créé dans la première dimension visitée.
+  const dim = bot.game?.dimension ?? 'overworld'
+  if (!bot._librebotMovementsByDim) bot._librebotMovementsByDim = {}
+  let movements = bot._librebotMovementsByDim[dim]
+  if (!movements) {
+    movements = new Movements(bot)
+    movements.canDig = true
+    movements.allowSprinting = true
+    movements.allowParkour = true
+    // NOTE : movements.maxDropHeight n'existe PAS dans mineflayer-pathfinder 2.4.5
+    // (vérifié dans lib/movements.js) — l'assigner était silently ignoré. La protection
+    // contre les chutes > 3 blocs est assurée par le watchdog de survie (survie.js,
+    // détection de chute libre + pose d'un bloc d'amortissement) et par walkDirect
+    // (détection de trou devant). On évite juste la lave via blocksToAvoid (défaut).
+    movements.allow1by1towers = true // peut pillar 1x1 si besoin
+    if (dim === 'the_nether') {
+      // GARDE-FOU NETHER (exigé par le workflow speedrun) : pas de sauts parkour —
+      // un atterrissage manqué = lac de lave. Les autres mouvements restent sûrs :
+      // le pathfinder ne pose jamais le bot sur/à côté d'un liquide de toute façon
+      movements.allowParkour = false
+      movements.allowSprinting = true // sprint sol/plafond ok
+    }
+    bot._librebotMovementsByDim[dim] = movements
   }
-  const movements = new Movements(bot)
-  movements.canDig = true
-  movements.allowSprinting = true
-  movements.allowParkour = true
-  // NOTE : movements.maxDropHeight n'existe PAS dans mineflayer-pathfinder 2.4.5
-  // (vérifié dans lib/movements.js) — l'assigner était silently ignoré. La protection
-  // contre les chutes > 3 blocs est assurée par le watchdog de survie (survie.js,
-  // détection de chute libre + pose d'un bloc d'amortissement) et par walkDirect
-  // (détection de trou devant). On évite juste la lave via blocksToAvoid (défaut).
-  movements.allow1by1towers = true // peut pillar 1x1 si besoin
   bot.pathfinder.setMovements(movements)
   // A* plus rapide : 100 ms de calcul par tick (au lieu de 50) divise par ~2
   // le nombre de ticks nécessaires, donc le temps réel pour trouver un chemin.
@@ -147,7 +157,7 @@ function setMovements (bot) {
   if (bot.collectBlock) {
     bot.collectBlock.movements = movements
   }
-  bot._librebotMovements = movements
+  bot._librebotMovements = movements // rétrocompat
 }
 
 // Extrait le point visé par un goal pathfinder (GoalNear / GoalBlock / GoalXZ)

@@ -25,7 +25,7 @@ check(fz.includes('angle += Math.PI / 3') && fz.includes('radius *= 1.08'), 'exp
 check(fz.includes("recordDiscovery('fortress'"), 'forteresse découverte mémorisée pour les runs futurs')
 
 // 3. auto-reprise après blocage
-check(missionSrc.includes('state.autoResumeAt = Date.now() + 5 * 60000'), 'blocage : auto-reprise programmée (5 min)')
+check(missionSrc.includes('progress.blocked[ph.key] = Date.now() + 5 * 60000'), 'blocage : phase en cooldown 5 min (la mission continue)')
 check(!/while \(isNight\(bot\) && !hasWeapon\(bot\) && waited/.test(missionSrc), 'nuit : plus d attente passive jusqu au matin')
 check(missionSrc.includes('JE BOSSE QUAND M'), 'nuit : le bot continue la mission protégé')
 check(indexSrc.includes('state.autoResumeAt && Date.now() > state.autoResumeAt'), 'idle watch : la reprise se déclenche seule')

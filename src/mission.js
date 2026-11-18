@@ -331,8 +331,11 @@ function status (bot) {
   const next = PHASES.find((ph) => !done.includes(ph.key))
   const workshopsDone = done.filter((k) => k.startsWith('atelier_')).length
   const follow = state.following ? ` — je suis ${state.following} 👣` : ''
+  const blocked = p.blocked ?? {}
+  const cooldowns = Object.entries(blocked).filter(([k, t]) => t > Date.now())
+  const cooldownTxt = cooldowns.length ? ' — en pause intelligente : ' + cooldowns.map(([k, t]) => k + ' (' + Math.ceil((t - Date.now()) / 60000) + ' min)').join(', ') : ''
   chat(bot, 'status', { done: done.length, total: PHASES.length, next: next ? next.label : 'terminé !' }, { force: true })
-  say(bot, '📊 Progression : ' + done.length + '/' + PHASES.length + ' phases (ateliers succès : ' + workshopsDone + '/6). Prochaine : ' + (next ? next.label : 'terminé !') + follow)
+  say(bot, '📊 Progression : ' + done.length + '/' + PHASES.length + ' phases (ateliers succès : ' + workshopsDone + '/6). Prochaine : ' + (next ? next.label : 'terminé !') + cooldownTxt + follow)
 }
 
 // ---------- Rattrapage adaptatif (catch-up) ----------
@@ -401,9 +404,24 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
     recoverPhasesFromInventory(bot, cfg, progress)
     // mode rush : seules les 13 phases de la mission dragon, pas les ateliers de succès
     const phases = cfg.rush ? PHASES.slice(0, 13) : PHASES
+    // ORDONNANCEUR : une phase bloquée ne gèle PLUS toute la mission.
+    // Elle passe en cooldown 5 min (progress.blocked) et le bot attaque la suite.
+    progress.blocked ??= {}
+    // dépendances硬 : une phase dont le prérequis est en cooldown ne peut pas réussir — on la saute aussi
+    const DEPENDS = { pierre: ['bois'], fer: ['pierre'], diamant: ['fer'], obsidienne: ['diamant'], base: [], nether: ['obsidienne'], forteresse: ['nether'], blazes: ['forteresse'], perles: ['nether'], yeux: ['blazes'], stronghold: ['yeux'], dragon: ['stronghold'] }
     for (const ph of phases) {
       if (progress.done.includes(ph.key)) {
         log(`⏭️ Phase déjà faite : ${ph.label}`)
+        continue
+      }
+      if (progress.blocked[ph.key] && progress.blocked[ph.key] > Date.now()) {
+        logThrottle('blocked-' + ph.key, `⏳ ${ph.label} en cooldown (bloquée il y a peu) — je m'occupe du reste`)
+        continue
+      }
+      if (progress.blocked[ph.key]) { delete progress.blocked[ph.key] } // cooldown écoulé : on retente
+      const depBlocked = (DEPENDS[ph.key] || []).filter((d) => progress.blocked[d] && progress.blocked[d] > Date.now())
+      if (depBlocked.length) {
+        logThrottle('dep-' + ph.key, `⏭️ ${ph.label} dépend de ${depBlocked.join(', ')} (bloquée) — je la garde pour plus tard`)
         continue
       }
       // attendre si en pause. La pause volontaire (commande "stop") est respectée
@@ -545,9 +563,19 @@ async function runMission (bot, cfg, { fromStart = false } = {}) {
         }
         if (!ok) {
           chat(bot, 'phaseBlocked', { label: ph.label, attempts: strat.attempts }, { force: true })
-          say(bot, '⛔ Phase ' + ph.label + ' bloquée après ' + strat.attempts + ' essais — je réessaierai seul dans 5 min Dis-moi "reprendre" pour retenter.')
-          state.autoResumeAt = Date.now() + 5 * 60000
-          log('🕒 auto-reprise programmée dans 5 min — le rattrapage inventaire profitera du temps écoulé')
+          progress.blocked[ph.key] = Date.now() + 5 * 60000
+          const restantes = phases.filter((x) => !progress.done.includes(x.key) && !(progress.blocked[x.key] > Date.now()) && !(DEPENDS[x.key] || []).some((d) => progress.blocked[d] > Date.now()))
+          if (restantes.length) {
+            say(bot, '⛔ ' + ph.label + ' bloqu\u00e9e (' + strat.attempts + ' essais) — je la mets de c\u00f4t\u00e9 5 min et j\'attaque : ' + restantes[0].label)
+            log('🕒 cooldown 5 min sur ' + ph.key + ' — la mission continue sur les ' + restantes.length + ' phase(s) indépendante(s)')
+            saveProgress(progress)
+            continue
+          }
+          // plus rien d'indépendant : on programme la reprise au plus proche cooldown
+          const prochain = Math.min(...Object.values(progress.blocked).filter(Boolean))
+          state.autoResumeAt = Math.max(Date.now() + 15000, prochain)
+          say(bot, '⛔ ' + ph.label + ' bloquée et plus rien d\u2019indépendant — je retente tout à ' + new Date(state.autoResumeAt).toLocaleTimeString())
+          log('🕒 auto-reprise programmée — le rattrapage inventaire profitera du temps écoulé')
           saveProgress(progress)
           return
         }
@@ -594,6 +622,13 @@ async function handleCommand (bot, cfg, from, message) {
     chat(bot, 'pause', {}, { force: true })
     say(bot, '⏸️ En pause. "reprendre" pour relancer.')
   } else if (/reprendre|resume|continue/.test(msg)) {
+    // "reprendre" = retenter MAINTENANT : les cooldowns de phases bloquées sont annulés
+    const p = loadProgress()
+    if (p.blocked && Object.keys(p.blocked).length) {
+      say(bot, '🕒 Cooldowns annulés (' + Object.keys(p.blocked).join(', ') + ') — je retente tout de suite')
+      p.blocked = {}
+      saveProgress(p)
+    }
     resume(bot)
     if (!state.running) runMission(bot, cfg).catch((e) => log(e.stack))
   } else if (/construire|build/.test(msg)) {

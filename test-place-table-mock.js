@@ -81,6 +81,12 @@ const main = async () => {
   check(res4 && res4.name === 'crafting_table', 'la table est retourn\u00e9e comme bloc pos\u00e9')
   check(b4._states && b4._states.jump === false, 'le bouton saut est rel\u00e2ch\u00e9 apr\u00e8s la pose')
 
+  // 5. une table/le four TROUVÉ mais injoignable (mur de manoir, falaise) ne doit
+  // plus être utilisée ni bloquer la phase — le bot en pose un lui-même
+  const u = fs.readFileSync('./src/utils.js', 'utf8')
+  check(u.includes("const reachable = (b) => b && b.name === 'crafting_table'") && u.includes("const reachable = (b) => b && b.name === 'furnace'"), 'garde de portée sur la table ET le four (injoignable = inutilisable)')
+  check(u.includes('en pose une autre ici') && u.includes('en pose un ici plut'), 'table/four injoignables : le bot en pose un autre au lieu de bloquer')
+
   console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
   process.exit(fails === 0 ? 0 : 1)
 }

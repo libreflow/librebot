@@ -725,21 +725,32 @@ async function ensureCraftingTable (bot) {
   const tableId = md.blocksByName.crafting_table?.id
   if (!tableId) throw new Error('crafting_table inconnu pour cette version')
   // cache : éviter de rescanner les blocs à chaque craftItem récursif
+  const reachable = (b) => b && b.name === 'crafting_table' && b.position.distanceTo(bot.entity.position) <= 4
   const cached = bot._librebotTablePos
   if (cached) {
     const b = bot.blockAt(cached)
+    if (reachable(b)) return b
     if (b && b.name === 'crafting_table') {
-      if (b.position.distanceTo(bot.entity.position) <= 4) return b
-      await goTo(bot, new GoalNear(b.position.x, b.position.y, b.position.z, 2), { timeout: 60000, retries: 0 })
-      const near = bot.blockAt(cached)
-      if (near && near.name === 'crafting_table') return near
+      // table connue mais HORS DE PORTÉE : on tente de s'en approcher UNE fois
+      await goTo(bot, new GoalNear(b.position.x, b.position.y, b.position.z, 2), { timeout: 60000, retries: 0 }).catch(() => {})
+      if (reachable(bot.blockAt(cached))) return bot.blockAt(cached)
+      // important : une table existante mais injoignable (mur, falaise) ne doit
+      // PAS bloquer le craft — on l'ignore et on en pose une nous-même
+      logThrottle('table-injoignable', '⛔ Table connue mais injoignable ' + (b.position ? '(' + b.position.x + ',' + b.position.y + ',' + b.position.z + ')' : '') + ' — j\'en pose une autre ici')
+      bot._librebotTablePos = null
+    } else {
+      bot._librebotTablePos = null // la table a été cassée/déplacée
     }
-    bot._librebotTablePos = null // la table a été cassée/déplacée
   }
   let table = bot.findBlock({ matching: tableId, maxDistance: 48 })
   if (table && table.position.distanceTo(bot.entity.position) > 4) {
-    await goTo(bot, new GoalNear(table.position.x, table.position.y, table.position.z, 2), { timeout: 60000, retries: 0 })
+    await goTo(bot, new GoalNear(table.position.x, table.position.y, table.position.z, 2), { timeout: 60000, retries: 0 }).catch(() => {})
     table = bot.findBlock({ matching: tableId, maxDistance: 8 })
+  }
+  // table trouvée mais toujours hors de portée = inutilisable : on en pose une
+  if (table && table.position.distanceTo(bot.entity.position) > 4) {
+    logThrottle('table-injoignable', '⛔ Table voisine injoignable — j\'en pose une ici plutôt')
+    table = null
   }
   if (table) { bot._librebotTablePos = table.position.clone(); return table }
   if (countItem(bot, 'crafting_table') > 0) {
@@ -767,21 +778,28 @@ async function ensureFurnace (bot) {
   const furnaceId = md.blocksByName.furnace?.id
   if (!furnaceId) throw new Error('furnace inconnu pour cette version')
   // cache : idem, éviter le findBlock à chaque smeltItem
+  const reachable = (b) => b && b.name === 'furnace' && b.position.distanceTo(bot.entity.position) <= 4
   const cached = bot._librebotFurnacePos
   if (cached) {
     const b = bot.blockAt(cached)
+    if (reachable(b)) return b
     if (b && b.name === 'furnace') {
-      if (b.position.distanceTo(bot.entity.position) <= 4) return b
-      await goTo(bot, new GoalNear(b.position.x, b.position.y, b.position.z, 2), { timeout: 60000, retries: 0 })
-      const near = bot.blockAt(cached)
-      if (near && near.name === 'furnace') return near
+      await goTo(bot, new GoalNear(b.position.x, b.position.y, b.position.z, 2), { timeout: 60000, retries: 0 }).catch(() => {})
+      if (reachable(bot.blockAt(cached))) return bot.blockAt(cached)
+      logThrottle('four-injoignable', '⛔ Four connu mais injoignable — j\'en pose un autre ici')
+      bot._librebotFurnacePos = null
+    } else {
+      bot._librebotFurnacePos = null
     }
-    bot._librebotFurnacePos = null
   }
   let furnace = bot.findBlock({ matching: furnaceId, maxDistance: 48 })
   if (furnace && furnace.position.distanceTo(bot.entity.position) > 4) {
-    await goTo(bot, new GoalNear(furnace.position.x, furnace.position.y, furnace.position.z, 2), { timeout: 60000, retries: 0 })
+    await goTo(bot, new GoalNear(furnace.position.x, furnace.position.y, furnace.position.z, 2), { timeout: 60000, retries: 0 }).catch(() => {})
     furnace = bot.findBlock({ matching: furnaceId, maxDistance: 8 })
+  }
+  if (furnace && furnace.position.distanceTo(bot.entity.position) > 4) {
+    logThrottle('four-injoignable', '⛔ Four voisin injoignable — j\'en pose un ici plutôt')
+    furnace = null
   }
   if (furnace) { bot._librebotFurnacePos = furnace.position.clone(); return furnace }
   if (countItem(bot, 'furnace') === 0) await craftItem(bot, 'furnace', 1)

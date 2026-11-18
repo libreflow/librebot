@@ -688,8 +688,13 @@ async function ensureCraftingTable (bot) {
   if (countItem(bot, 'crafting_table') > 0) {
     await placeBlockFromInventory(bot, 'crafting_table')
   } else {
-    // crafter une table directement dans l'inventaire (recette sans table)
-    const recipes = bot.recipesFor(md.itemsByName.crafting_table?.id, null, 1, null)
+    // crafter une table directement dans l'inventaire (recette sans table) ;
+    // s'il n'y a pas encore de planches, transformer d'abord les bûches en planches
+    let recipes = bot.recipesFor(md.itemsByName.crafting_table?.id, null, 1, null)
+    if (!recipes?.length) {
+      await craftAnyPlanks(bot, 4)
+      recipes = bot.recipesFor(md.itemsByName.crafting_table?.id, null, 1, null)
+    }
     if (!recipes?.length) throw new Error('pas de planches pour crafter une table')
     await bot.craft(recipes[0], 1, null)
     await placeBlockFromInventory(bot, 'crafting_table')

@@ -150,13 +150,13 @@ async function craftAny (bot, itemName, count = 1) {
   const p = plan(bot, itemName, count)
   if (p.gather.length) {
     log('📋 ' + itemName + ' : ressources manquantes → ' + p.gather.map(g => g.count + 'x ' + g.item).join(', '))
-    return false
+    return 'ressources manquantes : ' + p.gather.map(g => g.count + 'x ' + g.item).join(', ')
   }
   log('📋 Plan pour ' + count + 'x ' + itemName + ' :\n' + p.summary)
   for (const c of p.crafts) {
-    try { await craftItem(bot, c.item, c.count) } catch (e) { log('craft ' + c.item + ' a échoué: ' + e.message); return false }
+    try { await craftItem(bot, c.item, c.count) } catch (e) { return e.message }
   }
-  return countItem(bot, itemName) >= count
+  return countItem(bot, itemName) >= count ? null : 'craft de ' + itemName + ' échoué'
 }
 
 module.exports = { plan, buildTree, flattenPlan, executePlan, craftableList, craftAny, NOT_CRAFTABLE }

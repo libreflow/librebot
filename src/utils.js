@@ -229,7 +229,7 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
   const clear = () => { for (const s of ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']) bot.setControlState(s, false) }
   try {
     while (Date.now() - t0 < timeoutMs) {
-      if ((bot._fleeing && !ignoreFlee) || _moveAbort) return false
+      if (bot._fleeing && !ignoreFlee) return false
       const pos = bot.entity.position
       const d2 = Math.hypot(target.x - pos.x, target.z - pos.z)
       // arrivé = à côté horizontalement (un joueur ne vise pas le même Y exact)
@@ -312,10 +312,8 @@ async function walkDirect (bot, tx, ty, tz, { range = 2.5, timeoutMs = 20000, ig
 // survie + la mission + la fuite post-mort lancent des goTo concurrents qui
 // s'annulent mutuellement ("The goal was changed before it could be completed").
 let _moveChain = Promise.resolve()
-let _moveAbort = false
 function goTo (bot, goal, opts = {}) {
   const run = _moveChain.then(async () => {
-    _moveAbort = false
     if (opts.force) { try { bot.pathfinder.stop() } catch {} }
     const res = await _goTo(bot, goal, opts)
     // cerveau : mémoriser la fiabilité du trajet (de A vers B réussi ou raté) —
@@ -793,9 +791,15 @@ async function craftItem (bot, name, count) {
     _recipesCache[recipesKey] = recipes
   }
   if (!recipes.length) throw new Error(`pas de recette pour ${name}`)
-  // un seul parcours d'inventaire pour toutes les vérifications d'ingrédients
-  const invCount = new Map()
-  for (const i of bot.inventory.items()) invCount.set(i.name, (invCount.get(i.name) ?? 0) + i.count)
+  // inventaire LU FRAIS À CHAQUE PASSE : un instantané pris avant la boucle donnait
+  // des comptes périmés après la fabrication récursive d'un ingrédient (double craft
+  // ou faux « irrécupérables »). const snapshot = O(n) court, négligeable ici.
+  let invCount = new Map()
+  const refreshInv = () => {
+    invCount = new Map()
+    for (const i of bot.inventory.items()) invCount.set(i.name, (invCount.get(i.name) ?? 0) + i.count)
+  }
+  refreshInv()
   const countOf = (n) => invCount.get(n) ?? 0
   // item par id : itemsById (clé id) prioritaire, fallback md.items[id] (objet keyed-by-id
   // sur les versions récentes ; array sur d'anciennes versions de minecraft-data)
@@ -809,6 +813,7 @@ async function craftItem (bot, name, count) {
   let recipe = recipes.find(isCraftableNow) ?? recipes[0]
   // fabriquer (récursivement) les ingrédients manquants de la recette choisie
   for (let pass = 0; pass < 3; pass++) {
+    refreshInv() // comptes à jour (la passe précédente a pu fabriquer des ingrédients)
     let missing = false
     const resultCount = recipe.result?.count ?? 1
     const crafts = Math.ceil(need / resultCount)

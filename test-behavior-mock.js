@@ -4,6 +4,7 @@ let fails = 0
 const check = (c, m) => { console.log((c ? '✓' : '✗ FAIL') + ' ' + m); if (!c) fails++ }
 const U = fs.readFileSync('./src/utils.js', 'utf8')
 const S = fs.readFileSync('./src/survie.js', 'utf8')
+const P = fs.readFileSync('./src/phases.js', 'utf8')
 
 // 1. la veine minée est plafonnée au MANQUE RÉEL (fin du 95-pour-12)
 check(U.includes('const remaining = Math.max(1, count - got)') && U.includes('Math.min(16, remaining), 8, 1)'),
@@ -30,6 +31,15 @@ check(veinSize0 === 4, 'simulation : objectif 4 depuis 0 → veine de ' + veinSi
 // 5. opportunité : ne hijacke PLUS un pathfinding de mission en cours
 check(S.includes('!bot.pathfinder?.isMoving?.()'),
   'OPPORTUNITE attend que le pathfinder soit libre (fin des « The goal was changed »)')
+
+// 6. réactivité : attentes de cuisson adaptatives (fini le poll 2 s par lot)
+check(U.includes('batch * 10500'), 'four : attente = temps de cuisson vanilla calculé (10,5 s/lot d\'objet), poll serré ensuite')
+// 7. démarrage mission au spawn : 3 s -> 1,2 s
+check(fs.readFileSync('./src/index.js', 'utf8').includes('}, 1200)'), 'mission lancée 1,2 s après le spawn (avant 3 s)')
+// 8. relance pathfinder après échec : 1 s -> 0,5 s
+check(U.includes('await sleep(500)\n    }\n  }'), 'relance A* après échec : 500 ms (avant 1 s)')
+// 9. les vraies analyses (nuit, cristaux du dragon) sont PRESERVÉES
+check(P.includes('sleep(5000) // attendre la mort des cristaux'), 'attente utile conservée : mort des cristaux du dragon')
 
 console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
 process.exit(fails === 0 ? 0 : 1)

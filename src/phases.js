@@ -757,7 +757,6 @@ async function gotoEndIsland (bot) {
   // PRÉCAUTION END : le vide est mortel — réserve de blocs pour les ponts
   try { await ensureBridgeBlocks(bot, 32) } catch {}
   await goTo(bot, new GoalXZ(0, 0), { timeout: 120000, retries: 1 })
-  await sleep(1000)
 }
 
 async function findGroundBelow (bot) {

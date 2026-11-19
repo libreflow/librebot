@@ -332,7 +332,7 @@ async function createBot () {
           await require('./mission').waitSafe(bot).catch((e) => log('waitSafe: ' + e.message))
         }
         if (!state.running) runMission(bot, config).catch((e) => log(`mission error : ${e.stack}`))
-      }, 3000)
+      }, 1200)
     }
     // log de statut périodique (toutes les 5 min) pour surveiller de loin
     if (!bot._statusTimer) {

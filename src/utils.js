@@ -427,7 +427,7 @@ async function _goTo (bot, goal, { timeout = 120000, retries = 1, stuckMs = 8000
       clearInterval(watch); clearInterval(stuckKiller); clearInterval(speedTracker)
       lastErr = err
       try { bot.pathfinder.stop() } catch {}
-      await sleep(1000)
+      await sleep(500)
     }
   }
   clearInterval(speedTracker)
@@ -607,7 +607,7 @@ async function collectBlocks (bot, names, count, { maxDistance = 48, maxMinutes 
               // puis ramasser à nos pieds : poll 3 s avant de chercher ailleurs
               const bx = b.position.x, bz = b.position.z
               for (let w = 0; w < 6; w++) {
-                await sleep(500)
+                await sleep(300)
                 const drop = bot.nearestEntity((e) => isItemDrop(e) && Math.abs(e.position.x - bx) < 3 && Math.abs(e.position.z - bz) < 3)
                 if (drop) {
                   if (drop.position.distanceTo(bot.entity.position) > 1.5) {
@@ -1046,15 +1046,21 @@ async function smeltItem (bot, rawName, outName, count) {
       await furnace.putInput(raw.type, null, batch)
       const perFuel = (fuel.name === 'coal' || fuel.name === 'charcoal') ? 8 : 2
       await furnace.putFuel(fuel.type, null, Math.min(fuel.count, Math.max(1, Math.ceil(batch / perFuel))))
-      for (let t = 0; t < 90; t++) { // attendre la cuisson (max 3 min par lot, check toutes les 2 s)
-        await sleep(2000)
+      // cuisson vanilla : 10 s par objet — attente intelligente : presque tout
+      // d'un coup, puis poll serré (500 ms) ; avant : poll toutes les 2 s =
+      // jusqu'à 2 s perdues PAR LOT × chaque fonte du run
+      const cookMs = batch * 10500
+      const tCook = Date.now()
+      while (Date.now() - tCook < Math.max(0, cookMs - 1500)) await sleep(500)
+      for (let t = 0; t < 30; t++) { // marge réseau/four froid
         if (!furnace.inputItem() || (furnace.outputItem()?.count ?? 0) >= batch) break
+        await sleep(400)
       }
       if (furnace.outputItem()) await furnace.takeOutput()
     } finally {
       try { furnace.close() } catch {}
     }
-    await sleep(500)
+    await sleep(200)
   }
   if (countItem(bot, outName) < count) throw new Error(`fonte incomplète : ${outName} (${countItem(bot, outName)}/${count})`)
 

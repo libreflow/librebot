@@ -16,6 +16,10 @@ check(U.includes('async function barterWithPiglins'), '111. barterWithPiglins : 
 check(U.includes('tossStack(gold)') && U.includes('collectNearbyItems(bot, 10)'), '112. lingot jeté + butin (perles/obsidienne/fire res) collecté')
 check(P.includes('barterWithPiglins(bot,') && P.includes("countItem(bot, 'ender_pearl') >= cfg.targets.enderPearls"), '125. barattage intégré à phasePearls (alternative endermen), stoppe au quota')
 
+// 62/74. pas de voyage inutile : arbres VISIBLES d'abord, mémoire en repli seulement
+check(P.includes('arbre(s) visible(s)') && P.includes('maxDistance: 64'), '62/74. scan des arbres visibles (64 blocs) AVANT tout déplacement longue distance')
+check(P.includes("getNearestDiscoveries('tree', bot.entity.position, 1, 150)") && P.includes('new Vec3(k.x, k.y, k.z)'), 'mémoire arbres : repli limité à 150 blocs + vérif blockAt que l\'arbre existe toujours')
+
 // 44-46. Village : lit gratuit + foin -> pain
 check(P.includes("_bed'") && P.includes('hay_block') && P.includes("craftItem(bot, 'bread'"), '44-46. lit de village récupéré + bottes de foin transformées en pain')
 

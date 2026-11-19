@@ -31,11 +31,26 @@ async function phaseWood (bot, cfg, progress) {
   const ALL_LOGS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'pale_oak_log']
   const rush = !!cfg.rush
   let logs = 0
-  // 1. arbres mémorisés d'abord (apprentissage) : jusqu'à 3, du plus proche au
-  // plus loin, timeout court — un arbre de l'autre côté d'un océan ne vaut pas 2 min
-  const knownTrees = learn.getNearestDiscoveries('tree', bot.entity.position, 3, 400)
+  // 0. ARBRES VISIBLES D'ABORD : scanner le terrain autour (64 blocs) AVANT
+  // toute mémoire — le bug : le bot partait vers un arbre MÉMORISÉ à 100+ blocs
+  // d'une session précédente alors qu'il y avait des arbres juste à côté.
+  const logIds = ALL_LOGS.map((n) => md(bot).blocksByName[n]?.id).filter(Boolean)
+  const visible = logIds.length ? bot.findBlocks({ matching: logIds, maxDistance: 64, count: 8 }) : []
+  if (visible.length) {
+    const dmin = Math.min(...visible.map((v) => v.distanceTo(bot.entity.position)))
+    say(bot, '🌳 ' + visible.length + ' arbre(s) visible(s) à ' + Math.round(dmin) + ' blocs — je récolte sur place, pas de voyage inutile')
+    logs = await collectBlocks(bot, ALL_LOGS, rush ? 4 : 12, { maxDistance: 64, maxMinutes: rush ? 2 : 4 })
+  }
+  // 1. repli MÉMOIRE (apprentissage) : seulement si RIEN de visible — 1 seul,
+  // à max 150 blocs (fini les 400), et VÉRIFIÉ EXISTANT via blockAt (un arbre
+  // mémorisé d'une session précédente a pu être coupé depuis)
+  const knownTrees = logs > 0 ? [] : learn.getNearestDiscoveries('tree', bot.entity.position, 1, 150)
+    .filter((k) => {
+      const b = bot.blockAt(new Vec3(k.x, k.y, k.z))
+      return b && ALL_LOGS.includes(b.name)
+    })
   for (const k of knownTrees) {
-    say(bot, "🌲 Arbre mémorisé à " + Math.round(k.dist) + " blocs — j'y vais")
+    say(bot, "🌳 Arbre mémorisé à " + Math.round(k.dist) + " blocs (vérifié existant) — j'y vais")
     await goTo(bot, new GoalNear(k.x, k.y, k.z, 3), { timeout: 45000, retries: 0 }).catch(() => {})
     logs = await collectBlocks(bot, ALL_LOGS, rush ? 4 : 12, { maxDistance: 40, maxMinutes: 2 })
     if (logs > 0) break

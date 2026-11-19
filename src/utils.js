@@ -645,11 +645,25 @@ function isChestLooted (pos) {
 // puis marque le bloc comme vidé dans la carte pour ne pas y retourner.
 // Retourne le nombre d'items retirés. Basé sur l'exemple officiel
 // PrismarineJS/mineflayer examples/chest.js (containerItems + withdraw).
+// ---------- Mutex de fenetre (coffre/etabli/four) ----------
+// Un seul acces fenetre a la fois : le loot opportuniste d'un coffre PENDANT un
+// craft provoquait des collisions de clics -> « Event updateSlot:0 did not fire
+// within timeout » et un inventaire desynchronise (le bot croit n'avoir aucune
+// table alors qu'il vient d'en crafter une).
+let _winLock = null
+async function withExclusiveWindow (fn) {
+  while (_winLock) { try { await _winLock } catch {} }
+  let unlock
+  _winLock = new Promise((r) => { unlock = r })
+  globalThis._librebotWindowBusy = true
+  try { return await fn() } finally { unlock(); _winLock = null; globalThis._librebotWindowBusy = false }
+}
+
 async function lootSingleChest (bot, block) {
   if (!block || !block.position) throw new Error('bloc conteneur invalide')
   const pos = block.position
   if (isChestLooted(pos)) return 0
-  const container = await bot.openContainer(block)
+  const container = await withExclusiveWindow(() => bot.openContainer(block))
   let got = 0
   try {
     for (const item of container.containerItems()) {
@@ -764,7 +778,7 @@ async function ensureCraftingTable (bot) {
       recipes = bot.recipesFor(md.itemsByName.crafting_table?.id, null, 1, null)
     }
     if (!recipes?.length) throw new Error('pas de planches pour crafter une table')
-    await bot.craft(recipes[0], 1, null)
+    await withExclusiveWindow(() => bot.craft(recipes[0], 1, null))
     await placeBlockFromInventory(bot, 'crafting_table')
   }
   table = bot.findBlock({ matching: tableId, maxDistance: 8 })
@@ -904,7 +918,7 @@ async function craftItem (bot, name, count) {
     }
     const freshTable = await ensureCraftingTable(bot)
     try {
-      await bot.craft(recipe, crafts, freshTable)
+      await withExclusiveWindow(() => bot.craft(recipe, crafts, freshTable))
       chat(bot, 'crafting', { count: crafts, item: name })
       log('✓ crafté ' + crafts + '× ' + name)
       return
@@ -936,7 +950,7 @@ async function craftAnyPlanks (bot, count) {
     if (!recipes?.length) continue
     const batch = Math.min(countItem(bot, log), Math.ceil((count - made) / 4))
     if (batch <= 0) continue
-    await bot.craft(recipes[0], batch, null)
+    await withExclusiveWindow(() => bot.craft(recipes[0], batch, null))
     made += batch * 4
   }
   if (made === 0) {
@@ -1008,7 +1022,7 @@ async function smeltItem (bot, rawName, outName, count) {
     }
     if (!fuel) { log('plus de combustible'); break }
     chat(bot, 'smelting', { out: outName })
-    const furnace = await bot.openFurnace(furnaceBlock)
+    const furnace = await withExclusiveWindow(() => bot.openFurnace(furnaceBlock))
     try {
       const batch = Math.min(raw.count, count - countItem(bot, outName))
       await furnace.putInput(raw.type, null, batch)

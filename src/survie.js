@@ -387,7 +387,7 @@ function startSurvivalWatch (bot) {
       // anti-spam : coffres déjà vidés ignorés + fenêtre pas occupée par un craft
       // + max 1 opportunité/min (avant : 40 sélections sur 3 min qui bousculaient
       // les fenêtres des crafts en cours)
-      if (dec.action === 'OPPORTUNITE' && chestBlock && !(chestBlock.position && isChestLooted(chestBlock.position)) && !globalThis._librebotWindowBusy && (!hostile || hostileDist > 12) && Date.now() - lastChestLoot > 60000) {
+      if (dec.action === 'OPPORTUNITE' && chestBlock && !(chestBlock.position && isChestLooted(chestBlock.position)) && !globalThis._librebotWindowBusy && !bot.pathfinder?.isMoving?.() && (!hostile || hostileDist > 12) && Date.now() - lastChestLoot > 60000) {
         lastChestLoot = Date.now()
         const dist = Math.round(chestBlock.position.distanceTo(bot.entity.position))
         log('📦 Opportunité retenue : je fouille le coffre à ' + dist + ' blocs (score ' + dec.score + ')')

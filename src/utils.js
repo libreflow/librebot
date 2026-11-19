@@ -547,7 +547,19 @@ async function collectBlocks (bot, names, count, { maxDistance = 48, maxMinutes 
   let fails = 0
   let exploredOnce = false
   const t0 = Date.now()
+  const freeSlots = () => (bot.inventory.emptySlotCount?.() ?? 9)
+  const inventoryFull = () => freeSlots() === 0
+  let warnedFull = 0
   while (got < count && Date.now() - t0 < maxMinutes * 60000 && fails < 5) {
+    // inventaire plein : minera pour rien (drops non ramasses) -> dernier avertissement
+    if (inventoryFull()) {
+      try { require('./survie').dropJunk(bot) } catch {}
+      if (inventoryFull() && Date.now() - warnedFull > 20000) {
+        warnedFull = Date.now()
+        log('🎒 inventaire plein — je nettoie le junk avant de continuer à miner')
+      }
+      if (inventoryFull() && got > 0) break // deja assez : on rend la main
+    }
     const positions = bot.findBlocks({ matching: ids, maxDistance, count: 24 })
     if (!positions.length) {
       chat(bot, 'noBlocks', { names: names.join(', ') })
@@ -566,8 +578,12 @@ async function collectBlocks (bot, names, count, { maxDistance = 48, maxMinutes 
       if (!block) continue
       const dist = block.position.distanceTo(bot.entity.position)
       try {
+        // ANTI-SURMINAGE : on mine EXACTEMENT le manque (pas 16 d'office). Avant :
+        // 95 pierres minées pour un objectif à 12. La veine est plafonnée au
+        // reste à obtenir, +1 de marge pour un drop de rate.
+        const remaining = Math.max(1, count - got)
         // signature réelle (BlockVeins.js) : findFromVein(bot, block, maxBlocks, maxDistance, floodRadius)
-        const vein = await findFromVein(bot, block, 16, 8, 1)
+        const vein = await findFromVein(bot, block, Math.min(16, remaining), 8, 1)
         chat(bot, 'mining', { count: vein.length, dist: Math.round(dist) })
         log('⛏️ je mine ' + vein.length + ' bloc(s) à ' + Math.round(dist) + ' blocs')
         if (dist >= 8) {
@@ -582,6 +598,8 @@ async function collectBlocks (bot, names, count, { maxDistance = 48, maxMinutes 
             const fresh = bot.blockAt(b.position)
             if (!fresh || isVoid(fresh) || fresh.boundingBox === 'empty') continue
             if (fresh.type !== b.type) continue // le bloc a changé entre-temps (cassé + remplacé)
+            if (mined + got >= count) break // ANTI-SURMINAGE : quota atteint, on arrête là
+            if (inventoryFull()) break // plus de place : inutile de casser ce qu'on ne prendra pas
             try {
               await digBlock(bot, fresh, 3500) // 6 s max : un bloc normal casse en < 2 s
               mined++

@@ -183,7 +183,7 @@ async function createBot () {
           const p = loadProgress()
           if (p.worldId && p.worldId !== fp) {
             log('🌍 Nouveau monde détecté (spawn ' + fp + ' != ' + p.worldId + ') — progression réinitialisée, retour à la phase 1')
-            for (const k of ['done', 'deathPos', 'fortress', 'strongholdXZ', 'netherPortal', 'endPortal', 'portalRoom', 'home', 'confirm']) delete p[k]
+            for (const k of ['done', 'blocked', 'deathPos', 'fortress', 'strongholdXZ', 'netherPortal', 'endPortal', 'portalRoom', 'home', 'confirm']) delete p[k]
             p.worldId = fp
             saveProgress(p)
             try { require('./learn').resetWorldMemory() } catch (e) { log('reset learn: ' + e.message) }

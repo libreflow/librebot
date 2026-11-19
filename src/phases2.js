@@ -587,8 +587,9 @@ function wEndAgain () {
                 // 92-93. BATEAU DE L'END : châssis d'item frame contenant l'ÉLYTRE —
                 // les frames près de la cité signalent le bateau ; on les casse
                 try {
-                  const frames = bot.findEntities({ entityName: 'item_frame', maxDistance: 96 })?.filter?.((e) => e) ?? []
-                  const byEntity = frames.length ? frames : (Object.values(bot.entities).filter((e) => e.name === 'item_frame' && e.position?.distanceTo(bot.entity.position) < 160))
+                  // item frames = entités (mineflayer: bot.entities) — elles signalent
+                  // le trésor du bateau de l'End (dont l'élytre)
+                  const byEntity = Object.values(bot.entities).filter((e) => e.name === 'item_frame' && e.position?.distanceTo(bot.entity.position) < 160)
                   for (const fr of byEntity.slice(0, 4)) {
                     try {
                       await goTo(bot, new GoalNear(fr.position.x, fr.position.y, fr.position.z, 3), { timeout: 20000, retries: 0 }).catch(() => {})

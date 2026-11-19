@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "watchdog": "node watchdog.js",
-    "all": "node watchdog.js & node src/index.js"
+    "all": "node watchdog.js & node src/index.js",
+    "test": "node -e \"const fs=require('fs');const files=fs.readdirSync('.').filter(f=>/^test-.*\\.js$/.test(f));let bad=0;for(const f of files){const r=require('child_process').spawnSync(process.execPath,[f],{stdio:'inherit'});if(r.status!==0)bad++}process.exit(bad?1:0)\""
   },
   "engines": {
     "node": ">=18"

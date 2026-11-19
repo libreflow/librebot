@@ -35,7 +35,7 @@ const map = require('./src/map')
   // empreinte de monde dans index.js : la progression est liée au spawn
   const idx = fs.readFileSync('./src/index.js', 'utf8')
   check(idx.includes('worldId') && idx.includes('spawn_point'), 'index.js : empreinte de monde (spawn_point) comparée au worldId sauvegardé')
-  check(/for \(const k of \['done', 'deathPos', 'fortress'/.test(idx), 'index.js : nouveau monde → phases faites + positions réinitialisées')
+  check(/for \(const k of \['done', 'blocked', '/.test(idx), 'index.js : nouveau monde → phases faites + cooldowns + positions réinitialisés')
 
   console.log(fails === 0 ? '\nTOUS LES TESTS OK' : '\n' + fails + ' ÉCHECS')
   process.exit(fails === 0 ? 0 : 1)

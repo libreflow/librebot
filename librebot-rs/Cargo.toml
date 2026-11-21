@@ -1,0 +1,15 @@
+[package]
+name = "librebot-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Bot Minecraft Java Edition autonome en Rust (client protocole natif, zérot dépendance à Node)"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+flate2 = "1"
+md-5 = "0.10"
+
+[profile.release]
+lto = true
+strip = true
